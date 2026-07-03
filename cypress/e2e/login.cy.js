@@ -12,19 +12,23 @@ describe('Checky Pro Login', () => {
     // Enter Email from env variables
     cy.get('input[type="email"]')
       .should('be.visible')
+      .clear()
       .type(Cypress.env('LOGIN_EMAIL'));
 
     // Enter Password from env variables
+    // { log: false } hides the password from Cypress command logs
     cy.get('input[type="password"]')
       .should('be.visible')
-      .type(Cypress.env('LOGIN_PASSWORD'), { log: false }); // { log: false } hides the password from Cypress command logs
+      .clear()
+      .type(Cypress.env('LOGIN_PASSWORD'), { log: false }); 
 
     // Click the Login button
     cy.contains('button', 'Log in')
       .should('be.visible')
       .click();
 
-    // Verify successful login
+    // Verify successful login landing zone
+    cy.url({ timeout: 15000 }).should('include', '/dashboard');
     cy.url().should('not.include', '/login');
 
   });
