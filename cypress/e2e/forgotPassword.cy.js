@@ -5,23 +5,24 @@ describe("Reset password", () => {
     const newPassword = "Password@1234";
 
     it("Reset password and login", () => {
+        // Mute the noisy local ingest logs so they don't flood your console or UI
+        cy.intercept('POST', '**/ingest/**', { statusCode: 204 }).as('ingestLogs');
 
-        // Open Forgot Password page
+        // --- REQUEST RESET ---
         cy.visit("https://checkypro.robustapps.net/forgot-password");
 
-        // Enter email
         cy.get('input[type="email"]')
             .should("be.visible")
             .clear()
             .type(email);
 
-        // Click Reset Password
         cy.contains("Reset Password").click();
 
-        // Open latest email from YOPmail and navigate to reset page
+        // --- FETCH LINK FROM YOPMAIL ---
+        // Custom command to open email and grab link
         cy.openYopmailEmail(inbox);
 
-        // Verify Reset Password page
+        // --- COMPLETE RESET WORKFLOW ---
         cy.url({ timeout: 30000 }).should("include", "/reset-password");
 
         // Wait for visible inputs
@@ -49,7 +50,7 @@ describe("Reset password", () => {
         // Update Password
         cy.contains("Update Password").click();
 
-        // Verify Login page
+        // --- VERIFY LOGIN & RE-AUTH ---
         cy.url({ timeout: 30000 }).should("include", "/login");
 
         // Verify success message
@@ -71,8 +72,5 @@ describe("Reset password", () => {
 
         // Verify successful login
         cy.url({ timeout: 30000 }).should("not.include", "/login");
-
-        
     });
-
 });
