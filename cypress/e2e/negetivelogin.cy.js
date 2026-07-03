@@ -3,37 +3,42 @@ describe('Checky Pro Login - Negative Scenarios', () => {
   beforeEach(() => {
     cy.visit('https://checkypro.robustapps.net/login');
 
-    // Verify login page is loaded
+    
     cy.contains('Welcome back! Login to Checky Pro')
       .should('be.visible');
   });
 
   it('Should not login with an invalid email', () => {
+  
+    const invalidEmail = Cypress.env('INVALID_EMAIL') || 'invalid_user@test.com';
+    const password = Cypress.env('LOGIN_PASSWORD') || 'Password123!';
 
     cy.get('input[type="email"]')
-      .type(Cypress.env('INVALID_EMAIL'));
+      .type(invalidEmail);
 
     cy.get('input[type="password"]')
-      .type(Cypress.env('LOGIN_PASSWORD'), { log: false });
+      .type(password, { log: false });
 
     cy.contains('button', 'Log in')
       .click();
 
-    // User should remain on login page
+    
     cy.url().should('include', '/login');
 
-    // Verify error message
+    
     cy.contains(/invalid|incorrect|credentials|failed/i)
       .should('be.visible');
   });
 
   it('Should not login with an invalid password', () => {
+    const email = Cypress.env('LOGIN_EMAIL') || 'valid_user@test.com';
+    const invalidPassword = Cypress.env('INVALID_PASSWORD') || 'WrongPassword!';
 
     cy.get('input[type="email"]')
-      .type(Cypress.env('LOGIN_EMAIL'));
+      .type(email);
 
     cy.get('input[type="password"]')
-      .type(Cypress.env('INVALID_PASSWORD'), { log: false });
+      .type(invalidPassword, { log: false });
 
     cy.contains('button', 'Log in')
       .click();
@@ -45,12 +50,14 @@ describe('Checky Pro Login - Negative Scenarios', () => {
   });
 
   it('Should not login with both invalid email and password', () => {
+    const invalidEmail = Cypress.env('INVALID_EMAIL') || 'invalid_user@test.com';
+    const invalidPassword = Cypress.env('INVALID_PASSWORD') || 'WrongPassword!';
 
     cy.get('input[type="email"]')
-      .type(Cypress.env('INVALID_EMAIL'));
+      .type(invalidEmail);
 
     cy.get('input[type="password"]')
-      .type(Cypress.env('INVALID_PASSWORD'), { log: false });
+      .type(invalidPassword, { log: false });
 
     cy.contains('button', 'Log in')
       .click();
@@ -62,9 +69,10 @@ describe('Checky Pro Login - Negative Scenarios', () => {
   });
 
   it('Should not login when email is empty', () => {
+    const password = Cypress.env('LOGIN_PASSWORD') || 'Password123!';
 
     cy.get('input[type="password"]')
-      .type(Cypress.env('LOGIN_PASSWORD'), { log: false });
+      .type(password, { log: false });
 
     cy.contains('button', 'Log in')
       .click();
@@ -76,9 +84,10 @@ describe('Checky Pro Login - Negative Scenarios', () => {
   });
 
   it('Should not login when password is empty', () => {
+    const email = Cypress.env('LOGIN_EMAIL') || 'valid_user@test.com';
 
     cy.get('input[type="email"]')
-      .type(Cypress.env('LOGIN_EMAIL'));
+      .type(email);
 
     cy.contains('button', 'Log in')
       .click();
@@ -90,7 +99,6 @@ describe('Checky Pro Login - Negative Scenarios', () => {
   });
 
   it('Should not login when both email and password are empty', () => {
-
     cy.contains('button', 'Log in')
       .click();
 
@@ -104,12 +112,13 @@ describe('Checky Pro Login - Negative Scenarios', () => {
   });
 
   it('Should not login with an invalid email format', () => {
+    const password = Cypress.env('LOGIN_PASSWORD') || 'Password123!';
 
     cy.get('input[type="email"]')
       .type('invalid-email');
 
     cy.get('input[type="password"]')
-      .type(Cypress.env('LOGIN_PASSWORD'), { log: false });
+      .type(password, { log: false });
 
     cy.contains('button', 'Log in')
       .click();
