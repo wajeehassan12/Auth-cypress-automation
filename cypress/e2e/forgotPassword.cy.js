@@ -8,7 +8,7 @@ describe("Reset password", () => {
         // Mute the noisy local ingest logs so they don't flood your console or UI
         cy.intercept('POST', '**/ingest/**', { statusCode: 204 }).as('ingestLogs');
 
-        // --- REQUEST RESET ---
+        
         cy.visit("https://checkypro.robustapps.net/forgot-password");
 
         cy.get('input[type="email"]')
@@ -18,14 +18,13 @@ describe("Reset password", () => {
 
         cy.contains("Reset Password").click();
 
-        // --- FETCH LINK FROM YOPMAIL ---
-        // Custom command to open email and grab link
+        
         cy.openYopmailEmail(inbox);
 
-        // --- COMPLETE RESET WORKFLOW ---
+
         cy.url({ timeout: 30000 }).should("include", "/reset-password");
 
-        // Wait for visible inputs
+
         cy.get('input:visible', { timeout: 30000 })
             .should('have.length.at.least', 3);
 
