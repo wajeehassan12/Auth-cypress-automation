@@ -9,15 +9,15 @@ describe('Checky Pro Login', () => {
     cy.contains('Welcome back! Login to Checky Pro')
       .should('be.visible');
 
-    // Enter Email
+    // Enter Email from env variables
     cy.get('input[type="email"]')
       .should('be.visible')
-      .type('checkydev@yopmail.com');
+      .type(Cypress.env('LOGIN_EMAIL'));
 
-    // Enter Password
+    // Enter Password from env variables
     cy.get('input[type="password"]')
       .should('be.visible')
-      .type('12345678');
+      .type(Cypress.env('LOGIN_PASSWORD'), { log: false }); // { log: false } hides the password from Cypress command logs
 
     // Click the Login button
     cy.contains('button', 'Log in')

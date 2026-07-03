@@ -39,9 +39,8 @@ describe("CheckyPro Registration", () => {
             .should("be.visible")
             .click();
 
-        // =====================================================
         // STEP 2
-        // =====================================================
+        
 
         cy.get('input[name="company_name"]', {
             timeout: 20000
@@ -51,9 +50,9 @@ describe("CheckyPro Registration", () => {
             .clear()
             .type("Automation Company");
 
-        // =====================================================
+        
         // COUNTRY
-        // =====================================================
+        
 
         cy.get("#incorporationCountryBtn")
             .should("be.visible")
@@ -65,24 +64,23 @@ describe("CheckyPro Registration", () => {
         cy.get("#incorporationCountryName")
             .should("contain", "United States");
 
-        // =====================================================
+
         // SHOPIFY STORE
-        // =====================================================
+    
 
         cy.get('input[name="shopify_url"]')
             .clear()
             .type("store33-2wzacbz8");
 
-        // =====================================================
+    
         // MONTHLY REVENUE
-        // =====================================================
+        
 
         cy.get("#monthly_revenue")
             .select("0-15.000");
 
-        // =====================================================
         // PIXEL INTEGRATION
-        // =====================================================
+
 
         cy.get("#pixelIntegrationBtn")
             .click();
@@ -93,9 +91,9 @@ describe("CheckyPro Registration", () => {
         cy.get("#pixelIntegrationDisplay")
             .should("contain", "Trackbee.nl");
 
-        // =====================================================
+    
         // PAYMENT PROVIDER
-        // =====================================================
+    
 
         cy.get("#paymentProviderBtn")
             .click();
@@ -113,20 +111,18 @@ cy.log("The test is now paused. Complete the CAPTCHA, then click Resume in Cypre
 cy.pause();
 
 // Give the page a moment after resuming
+
 cy.wait(3000);
 
-// =====================================================
 // SIGN UP
-// =====================================================
 
 cy.contains("button", "Sign Up")
     .should("be.visible")
     .should("not.be.disabled")
     .click();
 
-        // =====================================================
         // EMAIL VERIFICATION PAGE
-        // =====================================================
+
 
         cy.url({ timeout: 30000 })
             .should("include", "email");
@@ -135,9 +131,8 @@ cy.contains("button", "Sign Up")
 
         cy.wait(3000);
 
-        // =====================================================
         // OPEN YOPMAIL
-        // =====================================================
+
 
         cy.visit(`https://yopmail.com/en/?login=${inbox}`);
 

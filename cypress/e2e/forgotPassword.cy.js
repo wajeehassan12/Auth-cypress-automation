@@ -72,11 +72,7 @@ describe("Reset password", () => {
         // Verify successful login
         cy.url({ timeout: 30000 }).should("not.include", "/login");
 
-        // If your dashboard URL is fixed, uncomment this:
-        // cy.url().should("include", "/dashboard");
-
-        // Optional dashboard assertion
-        // cy.contains("Dashboard").should("be.visible");
+        
     });
 
 });
