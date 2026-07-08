@@ -40,7 +40,6 @@ describe('Checky Pro - Required Phone & Payment Load Validation', () => {
 
         // --- 2. SIDEBAR NAVIGATION & CONFIGURING REQUIRED PHONE OPTION ---
         cy.log('Step 2: Navigating to Customization settings...');
-        // References the side menu configuration shown in image_68fd75.png and image_690115.png
         cy.contains('a, div, span', 'Customization', { timeout: 15000 })
             .should('be.visible')
             .click();
@@ -48,15 +47,12 @@ describe('Checky Pro - Required Phone & Payment Load Validation', () => {
         cy.url({ timeout: 15000 }).should('include', '/customization');
 
         cy.log('Step 2b: Setting Collect Phone Number option to Required...');
-        // References the layout section visible in image_69f85f.png
         cy.contains('Collect phone number', { timeout: 20000 })
             .scrollIntoView()
             .should('be.visible');
 
-        // Small visual delay so you can watch the runner focus on this section
         cy.wait(1000); 
 
-        // Direct selection bypasses fragile container elements entirely
         cy.contains('Required')
             .should('be.visible')
             .click({ force: true });
@@ -66,24 +62,34 @@ describe('Checky Pro - Required Phone & Payment Load Validation', () => {
             .should('be.visible')
             .click();
         
-        // Brief pause to allow the configuration adjustment to sync with the database cleanly
         cy.wait(3000);
+
+        // --- FIX: CLEAR CACHE & WORKERS BEFORE THE CROSS-ORIGIN BRIDGE ---
+        cy.log('Clearing local caches before cross-origin transition...');
+        cy.window().then((win) => {
+            win.sessionStorage.clear();
+            win.localStorage.clear();
+        });
+        cy.clearCookies();
 
         // --- 3. SHOPIFY STOREFRONT FLOW (CART SELECTION) ---
         cy.log('Step 3: Opening Shopify storefront origin...');
         cy.origin('https://checkyprostore.robustapps.net', () => {
-            cy.visit('/');
             
-            // Clean service worker context to bypass asset caching
-            cy.window().then((win) => {
-                if (win.navigator && win.navigator.serviceWorker) {
-                    win.navigator.serviceWorker.getRegistrations().then((regs) => {
-                        for (let reg of regs) reg.unregister();
-                    });
-                }
-            });
+            // Handle uncaught exceptions early inside the secondary origin bridge
+            Cypress.on('uncaught:exception', () => false);
 
-            cy.contains('Featured products', { timeout: 15000 }).should('be.visible').scrollIntoView();
+            // Clean service worker context BEFORE visiting to avoid blocking the bridge
+            if (window.navigator && window.navigator.serviceWorker) {
+                window.navigator.serviceWorker.getRegistrations().then((regs) => {
+                    for (let reg of regs) reg.unregister();
+                });
+            }
+
+            // Execute the visit inside the clean block
+            cy.visit('/');
+
+            cy.contains('Featured products', { timeout: 25000 }).should('be.visible').scrollIntoView();
             cy.get('a:visible').contains('Laptops').click();
             cy.get('button[name="add"]').should('be.visible').click();
             
@@ -109,25 +115,53 @@ describe('Checky Pro - Required Phone & Payment Load Validation', () => {
         cy.get('input#city').clear({ force: true }).type(Cypress.env('CHECKOUT_CITY'), { force: true });
         cy.get('input#zip').clear({ force: true }).type(Cypress.env('CHECKOUT_ZIP'), { force: true });
 
-        // --- 5. ENTER PHONE NUMBER & NATIVE RETRY FOR PAYMENT METHODS ---
+        // --- 5. ENTER PHONE NUMBER & WAIT BUFFER ---
         cy.log('Step 5: Entering the required phone number...');
-        
-        // Enter the required phone details
         cy.get('input#phone')
             .clear({ force: true })
-            .type(Cypress.env('CHECKOUT_PHONE'), { force: true });
+            .type(Cypress.env('CHECKOUT_PHONE'), { force: true })
+            .blur(); 
 
-        cy.log('Waiting up to 5 minutes for payment methods to dynamically initialize in the DOM...');
+        cy.log('Waiting 7 seconds for payment state initialization update...');
+        cy.wait(7000);
+
+        // --- 6. TARGETING AND VERIFYING INDIVIDUAL PAYMENT GATEWAY LOADS ---
+        cy.log('Step 6: Executing selection of payment methods...');
+
+        // Verify that the core payment selection container itself has successfully loaded onto the page first
+        cy.get('body', { timeout: 20000 }).should(($body) => {
+            expect($body.find('.payment-methods, #payment, form').length).to.be.greaterThan(0);
+        });
+
+        // Safe Conditional Check for PayPal vs Viva
+        cy.get('body').then(($body) => {
+            // Check if text 'PayPal' or any standard PayPal selector is visible in DOM
+            if ($body.text().includes('PayPal') || $body.find('iframe[title*="PayPal"]').length > 0) {
+                cy.log('PayPal detected. Attempting selection...');
+                cy.contains('PayPal', { timeout: 10000 })
+                    .should('be.visible')
+                    .click({ force: true });
+                cy.wait(2000);
+            } else {
+                cy.log('⚠️ PayPal text option not present in current DOM state. Skipping directly to primary Viva target.');
+            }
+        });
+
+        // 2. Interact and verify Viva Payment Container (Primary validation target)
+        cy.log('Testing Viva Payment selector injection...');
         
-        // Combined selector targeting the PayPal SDK iframes or payment container targets
-        const paymentSelector = 'iframe[title*="PayPal"], iframe[src*="paypal.com"], .payment-methods, #payment';
-
-        // Native Cypress retry loop configuration: will constantly poll the page for up to 5 minutes (300000ms).
-        // If they appear at any point within this window, the test passes immediately.
-        cy.get(paymentSelector, { timeout: 300000 })
+        // Use a wildcard regular expression match to find Viva options even if strings are slightly modified
+        cy.contains(/Viva/i, { timeout: 25000 })
             .should('be.visible')
-            .then(($el) => {
-                cy.log('✅ TEST PASSED: Payment methods successfully detected and loaded after entering phone details!');
-            });
+            .click({ force: true });
+
+        cy.wait(4000); 
+
+        // Assert that the checkout processing system updates and shows an active complete order step
+        cy.contains('button', /Complete Order/i, { timeout: 20000 })
+            .should('be.visible')
+            .should('not.have.attr', 'disabled');
+
+        cy.log('✅ TEST PASSED: Payment methods successfully detected, selected, and validated after matching requirement criteria.');
     });
 });

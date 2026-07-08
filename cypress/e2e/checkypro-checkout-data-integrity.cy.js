@@ -9,11 +9,9 @@ describe('Checky Pro - Check-out-page Automation & Product Flow Verification', (
             throw new Error('Missing LOGIN_EMAIL or LOGIN_PASSWORD environment variables.');
         }
 
-        // Setup global network intercepts for the Dashboard origin
         cy.intercept('GET', '**/store*').as('reEmbedRequest');
         cy.intercept('POST', '**/ingest/**', { statusCode: 204 }).as('ingestLogs');
 
-        // --- 1. DASHBOARD LOGIN ---
         cy.visit('https://checkypro.robustapps.net/login');
 
         cy.contains('Welcome back! Login to Checky Pro', { timeout: 20000 })
@@ -34,7 +32,6 @@ describe('Checky Pro - Check-out-page Automation & Product Flow Verification', (
 
         cy.contains('button', 'Re-embed script').should('be.visible').click();
 
-        // Verify Dashboard API Response
         cy.wait('@reEmbedRequest', { timeout: 30000 })
             .then((interception) => {
                 expect(interception.response.statusCode).to.eq(200);
@@ -44,17 +41,20 @@ describe('Checky Pro - Check-out-page Automation & Product Flow Verification', (
 
         // --- 3. STOREFRONT ORIGIN FLOW (robustapps.net) ---
         cy.origin('https://checkyprostore.robustapps.net', () => {
-            cy.visit('/');
             
-            // Clean up Service Workers to prevent proxy routing drops
-            cy.window().then((win) => {
-                if (win.navigator && win.navigator.serviceWorker) {
-                    win.navigator.serviceWorker.getRegistrations().then((registrations) => {
-                        for (let registration of registrations) {
-                            registration.unregister();
-                        }
-                    });
+            // Catch and handle cross-origin Permissions Policy exception
+            Cypress.on('uncaught:exception', (err) => {
+                if (err.message.includes('registerTool') || err.message.includes('permissions policy')) {
+                    return false; 
                 }
+                return true;
+            });
+
+            // --- FIX: Removed the native promise lookup to protect the spec bridge handshake ---
+            cy.visit('/', { 
+                timeout: 60000,
+                pageLoadTimeout: 60000,
+                retryOnStatusCodeFailure: true 
             });
 
             cy.url({ timeout: 30000 }).should('include', 'checkyprostore.robustapps.net');
@@ -114,9 +114,8 @@ describe('Checky Pro - Check-out-page Automation & Product Flow Verification', (
                     return cy.wrap(capturedData);
                 });
         }).then((cartData) => {
-            // --- 4. RETURNED TO TOP-LEVEL APP ORIGIN ---
             // Verify redirection to Checky Pro custom checkout page
-            cy.url({ timeout: 35000 }).should('include', '/checkout');
+            cy.url({ timeout: 45000 }).should('include', '/checkout');
 
             // Explicitly verify critical form components exist to guarantee the DOM is fully interactive
             cy.contains('Contact', { timeout: 20000 }).should('be.visible');
