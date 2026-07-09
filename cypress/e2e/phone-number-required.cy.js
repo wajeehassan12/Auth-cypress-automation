@@ -6,16 +6,17 @@ Cypress.on('uncaught:exception', (err, runnable) => {
     return true; 
 });
 
-describe('Checky Pro - Optional Phone & Payment Load Validation', () => {
+describe('Checky Pro - Required Phone & Payment Load Validation', () => {
 
-    it('Should enforce Optional Phone setting and verify payment methods load without a phone number', () => {
+    it('Should enforce Required Phone setting and verify payment methods load at checkout', () => {
         
         // --- 0. ENVIRONMENT SETUP ---
         const email = Cypress.env('LOGIN_EMAIL');
         const password = Cypress.env('LOGIN_PASSWORD');
+        const storeUrl = Cypress.env('STORE_URL');
 
-        if (!email || !password) {
-            throw new Error('Missing LOGIN_EMAIL or LOGIN_PASSWORD environment variables.');
+        if (!email || !password || !storeUrl) {
+            throw new Error('Missing environment or storeUrl configuration parameters.');
         }
 
         // Setup Network Intercepts
@@ -23,7 +24,7 @@ describe('Checky Pro - Optional Phone & Payment Load Validation', () => {
 
         // --- 1. DASHBOARD LOGIN & SCRIPT RE-EMBED ---
         cy.log('Step 1: Authenticating into admin panel...');
-        cy.visit('https://checkypro.robustapps.net/login');
+        cy.visit('/login');
         cy.contains('Welcome back! Login to Checky Pro', { timeout: 20000 }).should('be.visible');
         
         cy.get('input[type="email"]').should('be.visible').type(email);
@@ -38,52 +39,52 @@ describe('Checky Pro - Optional Phone & Payment Load Validation', () => {
         cy.contains('button', 'Re-embed script').should('be.visible').click();
         cy.wait('@reEmbedRequest', { timeout: 30000 }).its('response.statusCode').should('eq', 200);
 
-        // --- 2. SIDEBAR NAVIGATION & CONFIGURING OPTIONAL PHONE OPTION ---
+        // --- 2. SIDEBAR NAVIGATION & CONFIGURING REQUIRED PHONE OPTION ---
         cy.log('Step 2: Navigating to Customization settings...');
-        // References the side menu configuration shown in image_68fd75.png and image_690115.png
         cy.contains('a, div, span', 'Customization', { timeout: 15000 })
             .should('be.visible')
             .click();
 
         cy.url({ timeout: 15000 }).should('include', '/customization');
 
-        cy.log('Step 2b: Setting Collect Phone Number option to Optional...');
-        // References the layout section visible in image_69f85f.png
+        cy.log('Step 2b: Setting Collect Phone Number option to Required...');
         cy.contains('Collect phone number', { timeout: 20000 })
             .scrollIntoView()
             .should('be.visible');
 
-        // Small visual delay so you can watch the runner focus on this section
-        cy.wait(1000); 
-
-        // Direct selection to change setting to Optional
-        cy.contains('Optional')
+        cy.contains('Required')
             .should('be.visible')
             .click({ force: true });
         
         cy.log('Clicking the Save Changes button...');
         cy.contains('button', 'Save Changes')
             .should('be.visible')
-            .click();
+            .should('not.be.disabled')
+            .click()
+            .should('not.have.class', 'is-loading'); 
         
-        // Brief pause to allow the configuration adjustment to sync with the database cleanly
-        cy.wait(3000);
+        // --- FIX: CLEAR CACHE & WORKERS BEFORE THE CROSS-ORIGIN BRIDGE ---
+        cy.log('Clearing local caches before cross-origin transition...');
+        cy.window().then((win) => {
+            win.sessionStorage.clear();
+            win.localStorage.clear();
+        });
+        cy.clearCookies();
 
-        // --- 3. SHOPIFY STOREFRONT FLOW (CART SELECTION) ---
+        // --- 3. SHOPIFY STOREFRONT ORIGIN FLOW ---
         cy.log('Step 3: Opening Shopify storefront origin...');
-        cy.origin('https://checkyprostore.robustapps.net', () => {
-            cy.visit('/');
-            
-            // Clean service worker context to bypass asset caching
-            cy.window().then((win) => {
-                if (win.navigator && win.navigator.serviceWorker) {
-                    win.navigator.serviceWorker.getRegistrations().then((regs) => {
-                        for (let reg of regs) reg.unregister();
-                    });
-                }
-            });
+        cy.origin(storeUrl, { args: { storeUrl } }, ({ storeUrl }) => {
+            Cypress.on('uncaught:exception', () => false);
 
-            cy.contains('Featured products', { timeout: 15000 }).should('be.visible').scrollIntoView();
+            if (window.navigator && window.navigator.serviceWorker) {
+                window.navigator.serviceWorker.getRegistrations().then((regs) => {
+                    for (let reg of regs) reg.unregister();
+                });
+            }
+
+            cy.visit('/');
+
+            cy.contains('Featured products', { timeout: 25000 }).should('be.visible').scrollIntoView();
             cy.get('a:visible').contains('Laptops').click();
             cy.get('button[name="add"]').should('be.visible').click();
             
@@ -92,13 +93,12 @@ describe('Checky Pro - Optional Phone & Payment Load Validation', () => {
             cy.get('button[name="checkout"]:visible').should('be.visible').click();
         });
 
-        // --- 4. CHECKOUT FORM INTAKE (LEAVING PHONE FIELD BLANK) ---
-        cy.log('Step 4: Filling out checkout details while ignoring the phone field...');
+        // --- 4. CHECKOUT FORM INTAKE ---
+        cy.log('Step 4: Filling out basic checkout details...');
         cy.url({ timeout: 35000 }).should('include', '/checkout');
         
         cy.contains('Contact', { timeout: 20000 }).should('be.visible');
 
-        // Autofill standard shipping details smoothly
         cy.get('input[type="email"]').clear({ force: true }).type(Cypress.env('CHECKOUT_EMAIL'), { force: true });
         cy.get('select[name*="country"], select').first().select(Cypress.env('CHECKOUT_COUNTRY'));
         cy.get('input#firstName').clear({ force: true }).type(Cypress.env('CHECKOUT_FIRSTNAME'), { force: true });
@@ -109,23 +109,30 @@ describe('Checky Pro - Optional Phone & Payment Load Validation', () => {
         cy.get('input#city').clear({ force: true }).type(Cypress.env('CHECKOUT_CITY'), { force: true });
         cy.get('input#zip').clear({ force: true }).type(Cypress.env('CHECKOUT_ZIP'), { force: true });
 
-        // Explicitly clear the phone field to ensure it remains blank
+        // --- 5. ENTER PHONE NUMBER ---
+        cy.log('Step 5: Entering the required phone number...');
         cy.get('input#phone')
             .clear({ force: true })
-            .should('have.value', '');
+            .type(Cypress.env('CHECKOUT_PHONE'), { force: true })
+            .blur(); 
 
-        // --- 5. NATIVE RETRY FOR PAYMENT METHODS ---
-        cy.log('Step 5: Waiting up to 5 minutes for payment methods to initialize without a phone number...');
-        
-        // Combined selector targeting the PayPal SDK iframes or payment container targets
-        const paymentSelector = 'iframe[title*="PayPal"], iframe[src*="paypal.com"], .payment-methods, #payment';
+        // --- 6. TARGETING AND VERIFYING VIVA PAYMENT GATEWAY ---
+        cy.log('Step 6: Waiting for Viva method, scrolling down, and verifying selection...');
 
-        // Native Cypress retry loop: it will constantly check the page for up to 5 minutes.
-        // Since the field is optional, payment modules should load completely without user interaction on the phone input.
-        cy.get(paymentSelector, { timeout: 300000 })
+        // Wait up to 30 seconds for Viva to become visible in the DOM (allows the page to react to phone completion)
+        cy.contains(/Viva/i, { timeout: 30000 })
             .should('be.visible')
-            .then(($el) => {
-                cy.log('✅ TEST PASSED: Payment methods successfully loaded with an optional/empty phone number field!');
-            });
+            .scrollIntoView();
+
+        // Click the Viva payment element
+        cy.contains(/Viva/i)
+            .click({ force: true });
+
+        // Poll dynamically until the Complete Order button becomes active
+        cy.contains('button', /Complete Order/i, { timeout: 30000 })
+            .should('be.visible')
+            .should('not.be.disabled');
+        
+        cy.log('✅ TEST PASSED: Viva Payment verified successfully.');
     });
 });

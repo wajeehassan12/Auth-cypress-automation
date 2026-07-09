@@ -2,28 +2,27 @@ describe('Checky Pro Login', () => {
 
   it('Should login successfully with valid credentials', () => {
 
-    // Visit the login page
-    cy.visit('https://checkypro.robustapps.net/login');
+    // 1. Fix: Used relative path instead of hardcoded URL (Review Item 3)
+    cy.visit('/login');
 
     // Verify the login page is loaded
     cy.contains('Welcome back! Login to Checky Pro')
       .should('be.visible');
 
-    // Enter Email from env variables
-    cy.get('input[type="email"]')
+    // 2. Fallback: Targeting placeholder attributes until data-cy is added to the HTML source
+    cy.get('input[placeholder*="email" i], input[placeholder*="Email" i]')
       .should('be.visible')
       .clear()
       .type(Cypress.env('LOGIN_EMAIL'));
 
-    // Enter Password from env variables
-    // { log: false } hides the password from Cypress command logs
-    cy.get('input[type="password"]')
+    // 2. Fallback: Targeting placeholder attributes until data-cy is added to the HTML source
+    cy.get('input[placeholder*="password" i], input[placeholder*="Password" i]')
       .should('be.visible')
       .clear()
       .type(Cypress.env('LOGIN_PASSWORD'), { log: false }); 
 
-    // Click the Login button
-    cy.contains('button', 'Log in')
+    // 2. Fallback: Targeting the button specifically by its unique type inside the form
+    cy.get('form button[type="submit"]')
       .should('be.visible')
       .click();
 
