@@ -7,6 +7,7 @@
 
 // CRITICAL FIX: This line MUST be here to load your custom commands!
 import './commands';
+import 'cypress-real-events';
 
 // Refactored Exception Handling: No longer ignoring all errors blindly [cite: 44, 49, 50, 51]
 Cypress.on('uncaught:exception', (err, runnable) => {
