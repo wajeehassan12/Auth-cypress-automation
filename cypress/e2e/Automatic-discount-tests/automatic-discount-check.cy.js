@@ -6,9 +6,52 @@ Cypress.on('uncaught:exception', (err, runnable) => {
     return true;
 });
 
+/**
+ * Parses a numeric string that may use EITHER locale convention:
+ * - EU style:   "45.076,98"  (. = thousands, , = decimal)
+ * - US style:   "45,076.97"  (, = thousands, . = decimal)
+ * This matters because on this store the cart page renders EU-style
+ * numbers while the checkout page renders US-style numbers — blindly
+ * stripping commas (or dots) breaks one of the two formats.
+ *
+ * Rule: if both separators are present, whichever one appears LAST is
+ * the decimal separator (the other is thousands grouping). If only one
+ * separator type is present, treat it as decimal only when exactly two
+ * digits follow it (e.g. "98,50" -> decimal; "12,345" -> thousands).
+ */
+function parseLocaleNumber(raw) {
+    if (!raw) return NaN;
+    let str = String(raw).trim();
+
+    const lastComma = str.lastIndexOf(',');
+    const lastDot = str.lastIndexOf('.');
+
+    if (lastComma !== -1 && lastDot !== -1) {
+        if (lastComma > lastDot) {
+            // EU style: dots are thousands separators, comma is decimal
+            str = str.replace(/\./g, '').replace(',', '.');
+        } else {
+            // US style: commas are thousands separators, dot is decimal
+            str = str.replace(/,/g, '');
+        }
+    } else if (lastComma !== -1) {
+        const decimals = str.length - lastComma - 1;
+        str = decimals === 2
+            ? str.replace(',', '.')       // decimal comma, e.g. "98,50"
+            : str.replace(/,/g, '');      // thousands comma, e.g. "12,345"
+    } else if (lastDot !== -1) {
+        const decimals = str.length - lastDot - 1;
+        str = decimals === 2
+            ? str                          // already decimal dot, e.g. "98.50"
+            : str.replace(/\./g, '');      // thousands dot, e.g. "12.345"
+    }
+
+    return parseFloat(str);
+}
+
 describe('Checky Pro - Check-out-page Automation & Product Flow Verification', () => {
 
-    it('Should login, re-embed script, add multiple featured products, and verify discounted totals match at checkout', () => {
+    it('Should login, re-embed script, add multiple featured products, and verify the cart estimated total matches the checkout total amount', () => {
 
         const email = Cypress.env('LOGIN_EMAIL');
         const password = Cypress.env('LOGIN_PASSWORD');
@@ -129,31 +172,28 @@ describe('Checky Pro - Check-out-page Automation & Product Flow Verification', (
                         totalItemCount = PRODUCTS_TO_ADD.length;
                     }
 
-                    // 2. Safely capture the current estimated price balance string
-                    const fullText = $cartContainer.text().replace(/\s+/g, ' ');
+                    // 2. Safely capture the current estimated price balance string.
+                    const $cartClone = $cartContainer.clone();
+                    $cartClone.find('script, style, noscript, template').remove();
+                    const fullText = $cartClone.text().replace(/\s+/g, ' ');
 
                     let estimatedTotal = '';
-                    const totalMatch = fullText.match(/\bEstimated total\b\s*[€$]\s*([\d,.]+)/i);
+                    const totalMatch = fullText.match(/\bEstimated total\b[^0-9]{0,30}([\d][\d,.]*\d|\d)/i);
                     if (totalMatch) {
                         estimatedTotal = totalMatch[1];
                     } else {
-                        const allPrices = fullText.match(/[€$]\s*([\d,.]+)/g) || [];
+                        const allPrices = fullText.match(/(?:[€$£]|Rs\.?|PKR|USD|EUR|GBP)\s*([\d][\d,.]*\d|\d)/gi) || [];
                         if (allPrices.length) {
-                            estimatedTotal = allPrices[allPrices.length - 1].replace(/[^\d.,]/g, '');
+                            const lastPrice = allPrices[allPrices.length - 1].match(/([\d][\d,.]*\d|\d)/);
+                            estimatedTotal = lastPrice ? lastPrice[1] : '';
                         }
                     }
 
-                    let discountText = '';
-                    const discountMatch = fullText.match(/([\w\s]+)\(-\s*[€$]\s*[\d,.]+\)/i);
-                    if (discountMatch) {
-                        discountText = discountMatch[0].trim();
-                        cy.log(`Discount applied on cart: ${discountText}`);
-                    }
+                    cy.log(`Cart estimated total (raw): ${estimatedTotal}`);
 
                     const capturedData = {
                         itemCount: String(totalItemCount),
-                        totalPrice: estimatedTotal,
-                        discountText
+                        totalPrice: estimatedTotal
                     };
 
                     cy.get('button[name="checkout"]:visible')
@@ -179,28 +219,83 @@ describe('Checky Pro - Check-out-page Automation & Product Flow Verification', (
                     });
                     expect(String(checkoutCount)).to.equal(cartData.itemCount);
                 } else {
-                    expect($body.text()).to.include(cartData.itemCount);
+                    expect(getVisibleText($body)).to.include(cartData.itemCount);
                 }
             });
 
-            // --- TOTAL AMOUNT VERIFICATION ---
+            // Reads only visible, rendered text — strips metadata tags out first.
+            function getVisibleText($el) {
+                const $clone = $el.clone();
+                $clone.find('script, style, noscript, template').remove();
+                return $clone.text().replace(/\s+/g, ' ');
+            }
+
+            // Target explicit currency notation before dynamic digit chains (positive amounts for final summary total)
+            const TOTAL_AMOUNT_RE = /(?:[€$£]|Rs\.?|PKR|USD|EUR|GBP)\s*([\d][\d,.]*\d|\d)/i;
+
+            // Walks up from elements declaring the 'Total' key to gather context from the structural row unit wrapper
+            function findCheckoutTotal($body) {
+                let result = null;
+                $body.find('*').each(function () {
+                    if (result) return false;
+                    const $el = Cypress.$(this);
+                    
+                    const ownText = $el.clone().children().remove().end().text().trim();
+                    // Match "Total" or "Total due" but reject large parent wrapper sentences
+                    if ((!/^total$/i.test(ownText) && !/\bTotal\b/i.test(ownText)) || ownText.length > 40) return;
+
+                    let $row = $el;
+                    for (let depth = 0; depth < 6 && $row.length; depth++) {
+                        const rowText = getVisibleText($row);
+                        const amountMatch = rowText.match(TOTAL_AMOUNT_RE);
+                        if (amountMatch) {
+                            result = { rowText, amount: amountMatch[1] };
+                            return false;
+                        }
+                        $row = $row.parent();
+                    }
+                });
+                return result;
+            }
+
+            // --- ESTIMATED TOTAL (cart) vs FINAL TOTAL (checkout) VERIFICATION ---
             if (cartData.totalPrice) {
+                // Ensure hidden checkout side-drawers are active under reactive breakpoints
+                cy.get('body').then(($body) => {
+                    const $toggle = $body.find(
+                        'button:contains("Show order summary"), [class*="summary-toggle"], [aria-expanded="false"][class*="summary"]'
+                    ).filter(':visible');
+                    if ($toggle.length) {
+                        cy.wrap($toggle.first()).click({ force: true });
+                    }
+                });
+
                 cy.get('body', { timeout: 15000 }).should(($body) => {
-                    const pageText = $body.text().replace(/\s+/g, ' ');
+                    const found = findCheckoutTotal($body);
 
-                    // Dynamic regex safely bypasses intermediate characters like "EUR" and captures standard formatted numbers
-                    const totalLineMatch =
-                        pageText.match(/\bEstimated total\b(?:[\s\w]*)[€$]\s*([\d,.]+)/i) ||
-                        pageText.match(/\bOrder total\b(?:[\s\w]*)[€$]\s*([\d,.]+)/i) ||
-                        pageText.match(/(?<!Sub)\bTotal\b(?:[\s\w]*)[€$]\s*([\d,.]+)/i);
+                    const pageText = getVisibleText($body);
+                    // Match generic fallback strings tracking adjacent monetary items following label boundaries
+                    const wholePageMatch = !found && pageText.match(/\bTotal\b[\s\S]{0,100}?(?:[€$£]|Rs\.?|PKR|USD|EUR|GBP)\s*([\d][\d,.]*\d|\d)/i);
 
-                    expect(totalLineMatch, 'checkout total should be present').to.not.be.null;
+                    const rawCheckoutTotal = found
+                        ? found.amount
+                        : (wholePageMatch ? wholePageMatch[1] : null);
 
-                    // Clean formatting commas away before completing assertion check
-                    const checkoutTotal = parseFloat(totalLineMatch[1].replace(/,/g, ''));
-                    const cartTotal = parseFloat(cartData.totalPrice.replace(/,/g, ''));
+                    if (!rawCheckoutTotal) {
+                        expect.fail(`Checkout final "Total" amount should be present. First 400 chars of page text: "${pageText.slice(0, 400)}"`);
+                    }
 
-                    expect(checkoutTotal).to.equal(cartTotal);
+                    // Process contextual numbering models natively via internal helper architecture 
+                    const checkoutFinalTotal = parseLocaleNumber(rawCheckoutTotal);
+                    const cartEstimatedTotal = parseLocaleNumber(cartData.totalPrice);
+
+                    Cypress.log({ name: 'cart-total', message: `Cart estimated total (parsed): ${cartEstimatedTotal}` });
+                    Cypress.log({ name: 'checkout-total', message: `Checkout final total (parsed): ${checkoutFinalTotal}` });
+                    if (found) {
+                        Cypress.log({ name: 'matched-row', message: `Matched total row text: "${found.rowText}"` });
+                    }
+
+                    expect(checkoutFinalTotal).to.equal(cartEstimatedTotal);
                 });
             }
         });
