@@ -1,67 +1,46 @@
-// Global Exception Handler to catch leaky client-side exceptions
-Cypress.on('uncaught:exception', (err, runnable) => {
-    if (err.message.includes('secretKeyVerified is not defined')) {
-        return false;
-    }
-    return true;
-});
+import LoginPage from '../../page-objects/login-page';
+import SettingsPage from '../../page-objects/settingsPage';
+import StorefrontPage from '../../page-objects/storefrontPage';
+import CheckoutPage from '../../page-objects/checkoutPage';
 
 describe('Checky Pro - End-to-End Re-embed, Cart Journey & Discount Flow', () => {
+    const storeUrl = Cypress.env('STORE_URL');
 
-    it('Should log in, re-embed script, walk through cart checkout, apply discount, and remove it', () => {
+    beforeEach(() => {
+        const email = Cypress.env('LOGIN_EMAIL');
+        const password = Cypress.env('LOGIN_PASSWORD');
 
-        // --- 0. ENVIRONMENT SETUP ---
-        const email = Cypress.env('LOGIN_EMAIL') || 'valid_user@test.com';
-        const password = Cypress.env('LOGIN_PASSWORD') || 'Password123!';
-        const discountCode = Cypress.env('DISCOUNT_CODE') || 'YBMKT9Z3AVDP';
+        if (!email || !password) {
+            throw new Error('❌ Missing LOGIN_EMAIL or LOGIN_PASSWORD in cypress.env.json!');
+        }
 
-        const adminUrl = Cypress.config('baseUrl');
-        const storeUrl = Cypress.env('STORE_URL');
+        // Cache session to stay authenticated across runs/retries
+        LoginPage.loginViaSession(email, password);
+    });
 
-        cy.intercept('GET', '**/store*').as('reEmbedRequest');
-        cy.intercept('POST', '**/ingest/**', { statusCode: 204 }).as('ingestLogs');
+    it('Should successfully complete the dashboard setup, cross-origin shopping, and discount application', () => {
+        // 🚨 Read directly from cypress.env.json
+        const discountCode = Cypress.env('DISCOUNT_CODE');
 
-        // --- 1. DASHBOARD LOGIN ---
-        cy.visit(`${adminUrl}/login`);
+        if (!discountCode) {
+            throw new Error('❌ Missing DISCOUNT_CODE in cypress.env.json! Please define it.');
+        }
 
-        cy.contains('Welcome back! Login to Checky Pro', { timeout: 20000 })
-            .should('be.visible');
+        // --- 1. SETTINGS & SCRIPT RE-EMBED ---
+        LoginPage.visit(); // Navigates to base URL; session handles authentication instantly
+        SettingsPage.navigateToSettings();
+        SettingsPage.navigateToScriptSettings();
+        SettingsPage.reEmbedScript();
+        SettingsPage.clearStorageAndCookies();
 
-        cy.get('input[type="email"]').should('be.visible').type(email);
-        cy.get('input[type="password"]').should('be.visible').type(password, { log: false });
-        cy.contains('button', 'Log in').should('be.visible').click();
-
-        cy.url({ timeout: 30000 }).should('include', '/dashboard');
-
-        // --- 2. SETTINGS & SCRIPT RE-EMBED ---
-        cy.contains('Settings', { timeout: 15000 }).should('be.visible').click();
-        cy.url({ timeout: 15000 }).should('include', '/settings');
-
-        cy.contains('Checky Pro Script', { timeout: 15000 }).should('be.visible').click();
-        cy.url({ timeout: 15000 }).should('include', '/settings/checky-pro-script');
-
-        cy.contains('button', 'Re-embed script').should('be.visible').click();
-
-        cy.wait('@reEmbedRequest', { timeout: 30000 })
-            .its('response.statusCode')
-            .should('eq', 200);
-
-        cy.wait(3000);
-
-        cy.log('Purging storage configurations to prevent detached origin crashes...');
-        cy.window().then((win) => {
-            win.sessionStorage.clear();
-            win.localStorage.clear();
-        });
-        cy.clearCookies();
-
-        // --- 3. OPEN SHOPIFY STOREFRONT ORIGIN ---
-        cy.log('Step 3: Opening Shopify storefront origin...');
-        cy.origin(storeUrl, { args: { storeUrl } }, ({ storeUrl }) => {
+        // --- 2. OPEN SHOPIFY STOREFRONT (Cross-Origin Setup) ---
+        cy.origin(storeUrl, { args: { storeUrl, discountCode } }, ({ storeUrl, discountCode }) => {
+            // Uncaught exception override for storefront domain
             Cypress.on('uncaught:exception', () => false);
 
             cy.visit('/');
-
+            
+            // Clean up Service Workers
             cy.window().then((win) => {
                 if (win.navigator && win.navigator.serviceWorker) {
                     win.navigator.serviceWorker.getRegistrations().then((regs) => {
@@ -70,111 +49,86 @@ describe('Checky Pro - End-to-End Re-embed, Cart Journey & Discount Flow', () =>
                 }
             });
 
-            cy.contains('Featured products', { timeout: 25000 }).should('be.visible').scrollIntoView();
-            cy.get('a:visible').contains('Laptops').click();
-            cy.get('button[name="add"]').should('be.visible').click();
+            // 🛒 2a. Verify Storefront has loaded
+            cy.get('body').then(($body) => {
+                if ($body.find('[data-cy="featured-products-heading"]:visible').length > 0) {
+                    cy.get('[data-cy="featured-products-heading"]')
+                      .filter(':visible')
+                      .scrollIntoView();
+                } else {
+                    cy.contains('h2:visible, h1:visible, :visible', /Featured products|Featured/i, { timeout: 25000 })
+                      .first()
+                      .scrollIntoView();
+                }
+            });
 
-            cy.contains('View cart').should('be.visible').click();
-            cy.url().should('include', '/cart');
-            cy.get('button[name="checkout"]:visible').should('be.visible').click();
+            // 🛒 2b. Click on the VISIBLE Laptops card/product link
+            cy.get('body').then(($body) => {
+                if ($body.find('[data-cy="category-link-laptops"]:visible').length > 0) {
+                    cy.get('[data-cy="category-link-laptops"]').filter(':visible').click({ force: true });
+                } else {
+                    cy.contains('a:visible, h3:visible', /Laptops/i, { timeout: 15000 })
+                      .first()
+                      .click({ force: true });
+                }
+            });
+
+            // Verify product page navigation has fully completed before finding buy buttons
+            cy.url({ timeout: 15000 }).should('match', /\/(products|collections)\//);
+
+            // 🛒 2c. Add to Cart
+            cy.get('body').then(($body) => {
+                if ($body.find('[data-cy="add-to-cart-button"]:visible').length > 0) {
+                    cy.get('[data-cy="add-to-cart-button"]').filter(':visible').click({ force: true });
+                } else {
+                    cy.contains('button:visible, input[type="submit"]:visible, :visible', /Add to cart|Add to Bag/i, { timeout: 15000 })
+                      .first()
+                      .click({ force: true });
+                }
+            });
+
+            // 🛒 2d. State update delay followed by direct visit
+            cy.wait(3000); 
+            cy.visit('/cart');
+            cy.url({ timeout: 15000 }).should('include', '/cart');
+
+            // CART GUARD: Wait until the Laptops product is actually rendered in the cart list
+            cy.contains(/Laptops|Laptop/i, { timeout: 15000 }).should('be.visible');
+
+            // 🛒 2e. Proceed to Checkout
+            cy.get('body').then(($body) => {
+                const checkoutSelectors = [
+                    '[data-cy="checkout-button"]',
+                    'button[name="checkout"]',
+                    'input[name="checkout"]',
+                    '#checkout',
+                    '.cart__checkout-button',
+                    'form[action="/cart"] button[type="submit"]'
+                ];
+                
+                let clicked = false;
+                for (const selector of checkoutSelectors) {
+                    if ($body.find(selector + ':visible').length > 0) {
+                        cy.get(selector).filter(':visible').first().click({ force: true });
+                        clicked = true;
+                        break;
+                    }
+                }
+
+                if (!clicked) {
+                    cy.contains('button:visible, a:visible, :visible', /Checkout|Check out|Proceed/i, { timeout: 15000 })
+                      .first()
+                      .click({ force: true });
+                }
+            });
         });
 
-        // --- 4. CHECKOUT REDIRECT & STABILIZATION ---
-        cy.url({ timeout: 45000 }).should('include', '/checkout');
-        cy.contains('Contact', { timeout: 25000 }).should('be.visible');
-
-        cy.wait(4000);
-
-        // --- 5. DISCOUNT CODE APPLICATION & REMOVAL ---
-        cy.intercept('DELETE', '**/discount').as('deleteDiscount');
-
-        cy.contains('div:visible', 'Total', { timeout: 15000 })
-            .invoke('text')
-            .then((initialText) => {
-                const initialTotal = parseFloat(initialText.replace(/[^0-9.]/g, ''));
-                cy.log(`Initial Total Price: €${initialTotal}`);
-
-                cy.get('input[name="discount_code"]', { timeout: 15000 })
-                    .filter(':visible')
-                    .should('be.visible')
-                    .clear()
-                    .type(discountCode);
-
-                cy.get('button.discount-apply-button')
-                    .filter(':visible')
-                    .should('be.visible')
-                    .should('not.be.disabled')
-                    .click();
-
-                cy.contains('div:visible', 'Total', { timeout: 15000 })
-                    .should('not.contain', initialText);
-
-                cy.wait(3000);
-
-                // --- Stop the remove-discount control from opening a new tab ---
-                // A real, trusted click follows native anchor behavior (href/target="_blank"),
-                // unlike Cypress's old synthetic click. Strip any target="_blank" near the
-                // control, and stub window.open as a backup in case it's triggered via JS.
-                cy.window().then((win) => {
-                    cy.stub(win, 'open').as('windowOpen');
-                });
-
-                cy.get('.discount-container').then(($container) => {
-                    $container.find('a[target="_blank"]').removeAttr('target');
-                    if ($container.is('a[target="_blank"]')) {
-                        $container.removeAttr('target');
-                    }
-                    // Also cover the case where the container itself sits inside an anchor
-                    $container.parents('a[target="_blank"]').removeAttr('target');
-                });
-
-                // --- Poll for the remove-discount button to actually be enabled, then click it ---
-                const tryRemoveDiscount = (attempt = 1, maxAttempts = 12) => {
-                    cy.get('.discount-container', { timeout: 15000 }).should('be.visible');
-
-                    cy.get('.discount-container')
-                        .find('button.remove-discount-button')
-                        .then(($btn) => {
-                            const isDisabled = $btn.prop('disabled');
-                            cy.log(`Attempt ${attempt}/${maxAttempts} — remove button disabled: ${isDisabled}`);
-
-                            if (!isDisabled) {
-                                cy.wrap($btn).realMouseDown();
-                                cy.wrap($btn).realMouseUp();
-                            } else if (attempt < maxAttempts) {
-                                cy.wait(500);
-                                tryRemoveDiscount(attempt + 1, maxAttempts);
-                            } else {
-                                throw new Error(
-                                    `Remove-discount button stayed disabled for ${maxAttempts} attempts (~${maxAttempts * 500}ms of polling).`
-                                );
-                            }
-                        });
-                };
-
-                cy.screenshot('before-remove-discount-click');
-                tryRemoveDiscount();
-
-                // Confirm no new tab was actually spawned
-                cy.window().its('open').should('not.be.called');
-
-                cy.log('Waiting for backend server to confirm discount deletion...');
-                cy.wait('@deleteDiscount', { timeout: 20000 });
-
-                cy.log('Confirming discount element wrapper is removed from layout...');
-                cy.get('.discount-container', { timeout: 15000 })
-                    .should('not.exist');
-
-                cy.contains('div:visible', 'Total', { timeout: 15000 })
-                    .invoke('text')
-                    .then((revertedText) => {
-                        const revertedTotal = parseFloat(revertedText.replace(/[^0-9.]/g, ''));
-                        cy.log(`Reverted Total Price: €${revertedTotal}`);
-
-                        expect(revertedTotal).to.equal(initialTotal);
-                    });
-
-                cy.log('✅ TEST PASSED: Coupon successfully apply-settled and removed via a real trusted click!');
-            });
+        // --- 3. CHECKOUT FLOW ---
+        CheckoutPage.stabilizeCheckout();
+        CheckoutPage.applyDiscount(discountCode);
+        CheckoutPage.removeDiscount();
+        CheckoutPage.verifyPriceReverted();
+        
+        cy.log('✅ TEST PASSED: Setup, purchase journey, and coupon flows verified!');
     });
 });

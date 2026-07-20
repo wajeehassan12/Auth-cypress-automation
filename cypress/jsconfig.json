@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@page-objects/*": ["cypress/page-objects/*"]
+    }
+  },
+  "include": ["cypress/**/*.js"]
+}
