@@ -11,6 +11,11 @@
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
-    "cypress": "^15.18.0"
+    "crypto-js": "^4.2.0",
+    "cypress": "^15.18.0",
+    "cypress-real-events": "^1.15.0"
+  },
+  "allowScripts": {
+    "cypress@15.18.0": true
   }
 }
