@@ -1,50 +1,43 @@
 const { defineConfig } = require("cypress");
 
 module.exports = defineConfig({
-  // Bypasses cross-origin frame security barriers at the browser level
-  chromeWebSecurity: false,
-
   env: {
-    // Target Storefront
+    // Target Storefront & Service URLs (Part 1, Rule 11)
     STORE_URL: "https://checkyprostore.robustapps.net",
-    
-    // Checky-Pro Portal Login
-    CHECKY_PRO_LOGIN_URL: "https://checkypro.robustapps.net/login", 
-    CHECKY_PRO_USER: "checkydev@yopmail.com",
-    CHECKY_PRO_PASS: "12345678",
+    CHECKY_PRO_LOGIN_URL: "https://checkypro.robustapps.net/login",
 
-    // Rapyd Gateway Keys
-    RAPYD_ACCESS_KEY: "your_sandbox_access_key_here",    
-    RAPYD_SECRET_KEY: "your_sandbox_secret_key_here",
+    // Authentication Credentials (Part 1, Rule 11)
+    LOGIN_EMAIL: "checkydev@yopmail.com",
+    LOGIN_PASSWORD: "12345678",
 
-    // Custom Checkout Test Data
-    CHECKOUT_EMAIL: "tester@yopmail.com",
-    CHECKOUT_COUNTRY: "Netherlands",
-    CHECKOUT_FIRSTNAME: "John",
-    CHECKOUT_LASTNAME: "Doe",
-    CHECKOUT_ADDRESS: "Main Street",
-    CHECKOUT_HOUSE_NUMBER: "42",
-    CHECKOUT_SUFFIX: "B",
-    CHECKOUT_CITY: "Amsterdam",
-    CHECKOUT_ZIP: "1011 DJ",
-    
-    // Phone Number Variable
-    CHECKOUT_PHONE: "+31612345678"
+    // Test Discount Codes
+    DISCOUNT_CODE_SPECIFIC: "FKN8H02ANCWR",
+    DISCOUNT_CODE_3: "DISCOUNT30",
+
+    // Gateway Sandbox Keys
+    RAPYD_ACCESS_KEY: "your_sandbox_access_key_here",
+    RAPYD_SECRET_KEY: "your_sandbox_secret_key_here"
   },
 
   e2e: {
     baseUrl: "https://checkypro.robustapps.net",
     pageLoadTimeout: 90000,
-    specPattern: 'cypress/e2e/**/*.cy.{js,jsx,ts,tsx}',
-    
-    // Strips out third-party frame-busting security scripts
-    experimentalModifyObstructiveThirdPartyCode: true,
+    specPattern: "cypress/e2e/**/*.cy.{js,jsx,ts,tsx}",
 
-    // Allows loading Page Objects/dependencies inside cy.origin()
+    // Configure retries for CI runs as an environment safety net (Part 1, Rule 13 & Part 2, Rule 12)
+    retries: {
+      runMode: 2,
+      openMode: 0
+    },
+
+    // Allows loading Page Objects/dependencies inside cy.origin() (Part 2, Rule 14)
     experimentalOriginDependencies: true,
+
+    // Safely strips third-party frame-busting security scripts
+    experimentalModifyObstructiveThirdPartyCode: true,
 
     setupNodeEvents(on, config) {
       return config;
-    },
-  },
+    }
+  }
 });

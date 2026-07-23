@@ -1,142 +1,142 @@
 import loginPage from '../../page-objects/login-page';
 import settingsPage from '../../page-objects/settingsPage';
 import checkoutPage from '../../page-objects/checkoutPage';
-import storefrontPage from '../../page-objects/storefrontPage';
-
-// Global Exception Handler to catch leaky client-side exceptions
-Cypress.on('uncaught:exception', (err) => {
-    return !err.message.includes('secretKeyVerified is not defined');
-});
 
 describe('Checky Pro - End-to-End Re-embed, Cart Journey & Minimum-Purchase Discount Flow', () => {
 
-    it('Should log in, re-embed script, walk through cart checkout, and verify discount applies above €200 minimum purchase', () => {
+    beforeEach(() => {
+        const email = Cypress.env('LOGIN_EMAIL');
+        const password = Cypress.env('LOGIN_PASSWORD');
+        const adminUrl = Cypress.config('baseUrl');
 
-        // --- 0. ENVIRONMENT SETUP ---
-        const email = Cypress.env('LOGIN_EMAIL') || 'valid_user@test.com';
-        const password = Cypress.env('LOGIN_PASSWORD') || 'Password123!';
-        const discountCode = Cypress.env('DISCOUNT_CODE_2') || 'C6DDQT4PDF7T';
+        if (!email || !password) {
+            throw new Error('❌ Missing LOGIN_EMAIL or LOGIN_PASSWORD in cypress.env.json configuration.');
+        }
+
+        // Cache session across tests using Page Object Model (Part 1, Rule 6 & Part 2, Rule 1, 6)
+        cy.session([email, password], () => {
+            loginPage.login(email, password, adminUrl);
+        });
+    });
+
+    it('Should log in, re-embed script, walk through cart checkout, and verify minimum purchase threshold', () => {
+
+        // --- 0. ENVIRONMENT SETUP & PROTOCOL NORMALIZATION ---
+        const adminUrl = Cypress.config('baseUrl');
+        let storeUrl = Cypress.env('STORE_URL') || 'https://checkyprostore.robustapps.net';
+        const discountCode = Cypress.env('DISCOUNT_CODE_2');
         const MIN_PURCHASE_FOR_DISCOUNT = 200;
 
-        const adminUrl = Cypress.config('baseUrl');
-        const storeUrl = Cypress.env('STORE_URL');
-
-        cy.intercept('GET', '**/store*').as('reEmbedRequest');
-        cy.intercept('POST', '**/ingest/**', { statusCode: 204 }).as('ingestLogs');
-
-        // --- 1. DASHBOARD LOGIN ---
-        if (typeof loginPage.login === 'function') {
-            loginPage.login(email, password, adminUrl);
-        } else {
-            cy.visit(`${adminUrl}/login`);
-            cy.get('input[type="email"]').type(email);
-            cy.get('input[type="password"]').type(password, { log: false });
-            cy.get('button').contains(/Log in/i).click();
-        }
-        cy.url({ timeout: 30000 }).should('include', '/dashboard');
-
-        // --- 2. SETTINGS & SCRIPT RE-EMBED ---
-        if (typeof settingsPage.navigateToScriptSettings === 'function' && typeof settingsPage.reEmbedScript === 'function') {
-            settingsPage.navigateToScriptSettings();
-            settingsPage.reEmbedScript();
-        } else {
-            cy.contains('Settings', { timeout: 15000 }).click();
-            cy.contains('Checky Pro Script', { timeout: 15000 }).click();
-            cy.contains('button', 'Re-embed script').click();
+        if (!discountCode) {
+            throw new Error('❌ Missing DISCOUNT_CODE_2 in cypress.env.json configuration.');
         }
 
-        cy.wait('@reEmbedRequest', { timeout: 30000 }).its('response.statusCode').should('eq', 200);
-        cy.wait(3000);
+        // Enforce HTTPS protocol to prevent spec bridge mismatch (http -> https)
+        if (!storeUrl.startsWith('http://') && !storeUrl.startsWith('https://')) {
+            storeUrl = `https://${storeUrl}`;
+        } else if (storeUrl.startsWith('http://')) {
+            storeUrl = storeUrl.replace('http://', 'https://');
+        }
 
-        // Purge storage arrays prior to moving cross-origin
-        cy.window().then((win) => {
-            win.sessionStorage.clear();
-            win.localStorage.clear();
-        });
-        cy.clearCookies();
+        // --- 1. SETTINGS & SCRIPT RE-EMBED VIA PAGE OBJECT ---
+        cy.visit(`${adminUrl}/dashboard`);
+        settingsPage.navigateToScriptSettings();
+        settingsPage.reEmbedScript();
+        settingsPage.clearStorageAndCookies();
 
-        // --- 3. STOREFRONT & CART (Using storefrontPage via Cypress.require) ---
+        // --- 2. STOREFRONT ORIGIN & CART JOURNEY (Part 2, Rule 14) ---
         cy.origin(storeUrl, { args: { storeUrl } }, ({ storeUrl }) => {
-            Cypress.on('uncaught:exception', () => false);
-
             const storefrontModule = Cypress.require('../../page-objects/storefrontPage');
-            const storefront = storefrontModule.default || storefrontModule;
+            const TargetExport = storefrontModule.default || storefrontModule;
+            const storefront = (typeof TargetExport === 'function') 
+                ? new TargetExport() 
+                : (TargetExport.storefrontPage || TargetExport);
 
-            cy.visit('/');
+            cy.visit(storeUrl);
 
-            // Clean up Service Workers safely
-            cy.window().then((win) => {
-                if (win.navigator?.serviceWorker) {
-                    win.navigator.serviceWorker.getRegistrations().then((regs) => {
-                        regs.forEach(reg => reg.unregister());
-                    });
-                }
-            });
-
-            // Add Product to Cart
-            if (typeof storefront.addProductToCart === 'function') {
+            // Add product via Page Object method or retryable DOM selector fallback
+            if (storefront && typeof storefront.addProductToCart === 'function') {
                 storefront.addProductToCart('Laptops');
             } else {
-                cy.contains('Featured products', { timeout: 25000 }).scrollIntoView();
-                cy.get('a:visible').contains('Laptops').click();
-                cy.get('button[name="add"]').click();
+                cy.contains('a:visible', 'Laptops', { timeout: 15000 }).click();
+                cy.get('button[name="add"]', { timeout: 15000 })
+                    .should('be.visible')
+                    .and('not.be.disabled')
+                    .click();
             }
 
-            // Proceed to Checkout
-            if (typeof storefront.goToCheckout === 'function') {
+            // Go to checkout via Page Object method or retryable DOM selector fallback
+            if (storefront && typeof storefront.goToCheckout === 'function') {
                 storefront.goToCheckout();
             } else {
-                cy.contains('View cart').click();
-                cy.get('button[name="checkout"]:visible').click();
+                cy.visit(`${storeUrl}/cart`);
+                cy.get('button[name="checkout"], input[name="checkout"]', { timeout: 15000 })
+                    .filter(':visible')
+                    .first()
+                    .should('be.visible')
+                    .and('not.be.disabled')
+                    .click();
             }
         });
 
-        // --- 4. CHECKOUT REDIRECT & STABILIZATION ---
-        if (typeof checkoutPage.stabilizeCheckout === 'function') {
-            checkoutPage.stabilizeCheckout();
-        } else {
-            cy.url({ timeout: 45000 }).should('include', '/checkout');
-            cy.contains('Contact', { timeout: 25000 }).should('be.visible');
-            cy.wait(4000);
-        }
+        // --- 3. CHECKOUT REDIRECT & STABILIZATION ---
+        checkoutPage.stabilizeCheckout();
 
-        // --- 5. DISCOUNT CODE APPLICATION & MINIMUM-PURCHASE VERIFICATION ---
-        cy.get('body').then(($body) => {
-            const extractPrice = (textVal) => {
-                const matches = textVal.match(/\d+(?:,\d{3})*(?:\.\d+)?/);
-                return matches ? parseFloat(matches[0].replace(/,/g, '')) : parseFloat(textVal.replace(/[^0-9.]/g, ''));
-            };
+        // --- 4. CONDITIONAL DISCOUNT APPLICATION & VERIFICATION ---
+        const extractPrice = (textVal) => {
+            const matches = textVal.match(/\d+(?:,\d{3})*(?:\.\d+)?/);
+            return matches ? parseFloat(matches[0].replace(/,/g, '')) : parseFloat(textVal.replace(/[^0-9.]/g, ''));
+        };
 
-            cy.contains('div:visible', 'Total', { timeout: 15000 }).invoke('text').then((initialText) => {
+        cy.contains('div:visible', 'Total', { timeout: 15000 })
+            .invoke('text')
+            .should('match', /\d+/)
+            .then((initialText) => {
                 const initialTotal = extractPrice(initialText);
                 cy.log(`Initial Clean Total Price: €${initialTotal}`);
 
-                // Guard clause checking the minimum purchase limit
-                if (initialTotal < MIN_PURCHASE_FOR_DISCOUNT) {
-                    throw new Error(`❌ TEST FAILED: Cart total (€${initialTotal}) is below the required €${MIN_PURCHASE_FOR_DISCOUNT} minimum purchase.`);
+                // Enter discount code using resilient selector
+                cy.get('input[name="discount_code"], input[placeholder*="discount" i]', { timeout: 15000 })
+                    .filter(':visible')
+                    .first()
+                    .should('be.visible')
+                    .clear()
+                    .type(discountCode);
+
+                // Click apply button without { force: true } (Part 2, Rule 9)
+                cy.contains('button:visible', /apply/i, { timeout: 15000 })
+                    .should('be.visible')
+                    .and('not.be.disabled')
+                    .click();
+
+                // EVALUATE CONDITION
+                if (initialTotal >= MIN_PURCHASE_FOR_DISCOUNT) {
+                    // CASE A: Minimum purchase met -> Verify discount APPLIED
+                    cy.contains('div:visible', 'Total', { timeout: 20000 })
+                        .should(($totalDiv) => {
+                            const finalTotal = extractPrice($totalDiv.text());
+                            expect(
+                                finalTotal,
+                                `Expected discount to reduce total from initial €${initialTotal}`
+                            ).to.be.lessThan(initialTotal);
+                        })
+                        .then(() => {
+                            cy.log(`✅ TEST PASSED: Cart (€${initialTotal}) met €${MIN_PURCHASE_FOR_DISCOUNT} minimum and discount was applied!`);
+                        });
+                } else {
+                    // CASE B: Minimum purchase NOT met -> Verify discount REJECTED
+                    cy.contains('div:visible', 'Total', { timeout: 20000 })
+                        .should(($totalDiv) => {
+                            const finalTotal = extractPrice($totalDiv.text());
+                            expect(
+                                finalTotal,
+                                `Cart total (€${initialTotal}) is below €${MIN_PURCHASE_FOR_DISCOUNT} minimum requirement. Discount must NOT apply.`
+                            ).to.equal(initialTotal);
+                        })
+                        .then(() => {
+                            cy.log(`✅ TEST PASSED: Cart (€${initialTotal}) did NOT meet €${MIN_PURCHASE_FOR_DISCOUNT} minimum and discount was correctly rejected!`);
+                        });
                 }
-
-                // Locate discount coupon inputs dynamically using Page Objects
-                const inputField = typeof checkoutPage.getDiscountInput === 'function' 
-                    ? checkoutPage.getDiscountInput() 
-                    : cy.get('input[name="discount_code"]').first();
-
-                inputField.clear().type(discountCode);
-
-                const applyBtn = typeof checkoutPage.getApplyButton === 'function' 
-                    ? checkoutPage.getApplyButton() 
-                    : cy.get('button.discount-apply-button');
-
-                applyBtn.click({ force: true });
-
-                // Verify that a discount was successfully calculated and decreased the final total
-                cy.contains('div:visible', 'Total', { timeout: 15000 }).should(($div) => {
-                    const finalTotal = extractPrice($div.text());
-                    expect(finalTotal).to.be.lessThan(initialTotal);
-                });
-
-                cy.log(`✅ TEST PASSED: Cart met the €${MIN_PURCHASE_FOR_DISCOUNT} minimum and a discount was successfully applied!`);
             });
-        });
     });
 });

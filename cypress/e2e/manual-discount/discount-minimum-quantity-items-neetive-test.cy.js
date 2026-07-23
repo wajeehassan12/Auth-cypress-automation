@@ -1,120 +1,108 @@
-import loginPage from '../../page-objects/login-page'; // Changed 'loginPage' to 'login-page' to match your file explorer
+import loginPage from '../../page-objects/login-page';
 import settingsPage from '../../page-objects/settingsPage';
-import storefrontPage from '../../page-objects/storefrontPage';
 import checkoutPage from '../../page-objects/checkoutPage';
-
-// Global Exception Handler to catch leaky client-side exceptions
-Cypress.on('uncaught:exception', (err, runnable) => {
-    if (err.message.includes('secretKeyVerified is not defined')) {
-        return false;
-    }
-    return true;
-});
 
 describe('Checky Pro - End-to-End Re-embed, Cart Journey & Minimum-Quantity Discount Flow (Negative Test)', () => {
 
-    it('Should log in, re-embed script, walk through cart checkout, and confirm failure if quantity is below minimum requirement', () => {
+    beforeEach(() => {
+        const email = Cypress.env('LOGIN_EMAIL');
+        const password = Cypress.env('LOGIN_PASSWORD');
+        const adminUrl = Cypress.config('baseUrl');
 
-        // --- 0. ENVIRONMENT SETUP ---
-        const email = Cypress.env('LOGIN_EMAIL') || 'valid_user@test.com';
-        const password = Cypress.env('LOGIN_PASSWORD') || 'Password123!';
-        const REQUIRED_MIN_QUANTITY = 3; // Rule threshold: Must fail if less than 3
+        if (!email || !password) {
+            throw new Error('❌ Missing LOGIN_EMAIL or LOGIN_PASSWORD in cypress.env.json configuration.');
+        }
 
+        // Cache login session via loginPage POM (Part 1, Rule 6 & Part 2, Rule 1)
+        cy.session([email, password], () => {
+            loginPage.login(email, password, adminUrl);
+        });
+    });
+
+    it('Should verify discount is restricted when item quantity is below minimum requirement', () => {
         const adminUrl = Cypress.config('baseUrl');
         const storeUrl = Cypress.env('STORE_URL');
+        const requiredMinQuantity = Number(Cypress.env('REQUIRED_MIN_QUANTITY') || 3);
 
-        cy.intercept('GET', '**/store*').as('reEmbedRequest');
-        cy.intercept('POST', '**/ingest/**', { statusCode: 204 }).as('ingestLogs');
+        // --- 1. SETTINGS & RE-EMBED VIA PAGE OBJECT ---
+        cy.visit(`${adminUrl}/dashboard`);
+        settingsPage.navigateToScriptSettings();
+        settingsPage.reEmbedScript();
+        settingsPage.clearStorageAndCookies();
 
-        // --- 1. DASHBOARD CACHED LOGIN FLOW VIA cy.session() ---
-        cy.session([email, password], () => {
-            cy.visit(`${adminUrl}/login`);
-            cy.contains('Welcome back! Login to Checky Pro', { timeout: 20000 }).should('be.visible');
-            cy.get('input[type="email"]').should('be.visible').type(email);
-            cy.get('input[type="password"]').should('be.visible').type(password, { log: false });
-            cy.contains('button', 'Log in').should('be.visible').click();
-            cy.url({ timeout: 30000 }).should('include', '/dashboard');
-        });
-
-        // --- 2. SETTINGS & SCRIPT RE-EMBED ---
-        cy.visit(`${adminUrl}/dashboard`); 
-        
-        if (typeof settingsPage.navigateToScriptSettings === 'function') {
-            settingsPage.navigateToScriptSettings();
-        } else {
-            cy.contains('Settings', { timeout: 15000 }).should('be.visible').click();
-            cy.url({ timeout: 15000 }).should('include', '/settings');
-            cy.contains('Checky Pro Script', { timeout: 15000 }).should('be.visible').click();
-            cy.url({ timeout: 15000 }).should('include', '/settings/checky-pro-script');
-        }
-
-        if (typeof settingsPage.reEmbedScript === 'function') {
-            settingsPage.reEmbedScript();
-        } else {
-            cy.contains('button', 'Re-embed script').should('be.visible').click();
-            cy.wait('@reEmbedRequest', { timeout: 30000 }).its('response.statusCode').should('eq', 200);
-        }
-
-        cy.log('Purging storage configurations to prevent detached origin crashes...');
-        cy.window().then((win) => {
-            win.sessionStorage.clear();
-            win.localStorage.clear();
-        });
-        cy.clearCookies();
-
-        // --- 3. OPEN SHOPIFY STOREFRONT ORIGIN ---
-        cy.log('Step 3: Opening Shopify storefront origin...');
+        // --- 2. OPEN SHOPIFY STOREFRONT ORIGIN (Cross-Origin Setup) ---
         cy.origin(storeUrl, { args: { storeUrl } }, ({ storeUrl }) => {
-            Cypress.on('uncaught:exception', () => false);
             cy.visit('/');
 
+            // Clean service workers asynchronously without hardcoded delays (Part 1, Rule 2)
             cy.window().then((win) => {
-                if (win.navigator && win.navigator.serviceWorker) {
-                    win.navigator.serviceWorker.getRegistrations().then((regs) => {
-                        for (let reg of regs) reg.unregister();
-                    });
+                if (win.navigator?.serviceWorker) {
+                    return win.navigator.serviceWorker.getRegistrations().then((regs) =>
+                        Promise.all(regs.map((r) => r.unregister()))
+                    );
                 }
             });
 
-            cy.contains('Featured products', { timeout: 25000 }).should('be.visible').scrollIntoView();
-            cy.get('a:visible').contains('Laptops').click();
+            // Resilient behavior-based navigation (Part 1, Rule 1 & Part 2, Rule 5)
+            cy.contains('Featured products', { timeout: 25000 })
+                .should('be.visible')
+                .scrollIntoView();
 
+            cy.get('a:visible').contains(/Laptops/i).click();
+
+            // Set quantity below required threshold (Quantity = 2)
             cy.get('button[name="plus"]', { timeout: 15000 })
                 .should('be.visible')
-                .should('not.be.disabled')
-                .click(); 
+                .and('not.be.disabled')
+                .click();
 
-            cy.get('input[name="quantity"]', { timeout: 10000 }).should('have.value', '2');
+            cy.get('input[name="quantity"]').should('have.value', '2');
+
+            // Add product to cart
             cy.get('button[name="add"]').should('be.visible').click();
 
-            cy.contains('View cart', { timeout: 15000 }).should('be.visible').click();
+            // Proceed to cart & checkout without force: true (Part 2, Rule 9)
+            cy.contains('a, button', /View cart/i, { timeout: 15000 })
+                .should('be.visible')
+                .click();
+
             cy.url().should('include', '/cart');
-            cy.get('button[name="checkout"]').filter(':visible').should('be.visible').click();
+
+            cy.get('button[name="checkout"], input[name="checkout"]')
+                .filter(':visible')
+                .first()
+                .should('be.visible')
+                .and('not.be.disabled')
+                .click();
         });
 
-        // --- 4. CHECKOUT REDIRECT & STABILIZATION ---
+        // --- 3. CHECKOUT REDIRECT & STABILIZATION ---
         checkoutPage.stabilizeCheckout();
 
-        // --- 5. DISCOUNT APPLICATION & QUANTITY CHECK VALIDATION ---
-        cy.get('body', { timeout: 15000 }).then(($body) => {
-            let totalQuantity = 0;
+        // --- 4. RESILIENT QUANTITY VERIFICATION ---
+        // Anchors on visible product name 'Laptops', traverses to its row, and extracts badge digit
+        cy.contains('Laptops', { timeout: 20000 })
+            .should('be.visible')
+            .parents()
+            .find('span, div, [class*="badge"], [data-cy*="badge"]')
+            .filter(':visible')
+            .filter((_, el) => /^\d+$/.test(Cypress.$(el).text().trim()))
+            .first()
+            .invoke('text')
+            .then((text) => {
+                const totalQuantity = parseInt(text.trim(), 10);
 
-            const foundBadges = $body.find('span, div').filter((i, el) => {
-                const text = Cypress.$(el).text().trim();
-                return /^\d+$/.test(text) && Cypress.$(el).is(':visible');
+                // Explicit Condition Evaluation
+                if (totalQuantity < requiredMinQuantity) {
+                    cy.log(
+                        `✅ NEGATIVE TEST PASSED: Item quantity (${totalQuantity}) is strictly less than required minimum threshold (${requiredMinQuantity}). Discount successfully restricted.`
+                    );
+                    expect(totalQuantity).to.be.below(requiredMinQuantity);
+                } else {
+                    throw new Error(
+                        `❌ NEGATIVE TEST FAILED: Item quantity (${totalQuantity}) met or exceeded minimum threshold (${requiredMinQuantity}).`
+                    );
+                }
             });
-
-            if (foundBadges.length > 0) {
-                totalQuantity = parseInt(foundBadges.first().text().trim(), 10);
-            }
-
-            cy.log(`Scraped Counter Value from Image: ${totalQuantity}`);
-
-            if (totalQuantity < REQUIRED_MIN_QUANTITY) {
-                cy.log(`✅ NEGATIVE TEST CONFIRMED: Discount restricted. Product quantity (${totalQuantity}) is less than the required minimum threshold of ${REQUIRED_MIN_QUANTITY}.`);
-            } else {
-                throw new Error(`⚠️ TEST FAILURE: Expected cart to be restricted, but quantity (${totalQuantity}) met or exceeded minimum threshold.`);
-            }
-        });
     });
 });

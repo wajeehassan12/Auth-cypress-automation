@@ -34,7 +34,7 @@ class CheckoutPage {
     }
 
     removeDiscount() {
-        // 🚨 FIX: Streamline the command chain so the 15-second timeout protects the entire assertion.
+        // Streamline the command chain so the 15-second timeout protects the entire assertion.
         // Cypress will now gracefully poll the element until it becomes active and enabled!
         cy.get('button.remove-discount-button:visible', { timeout: 15000 })
           .should('not.be.disabled')
@@ -49,6 +49,19 @@ class CheckoutPage {
           
         // 2. Double-check that any active discount badges are gone
         cy.get('body').should('not.contain', 'Discount applied');
+    }
+
+    // Integrated from previous core-redirect-026 navigation implementation
+    clickStoreLogo() {
+        cy.get('body').then(($body) => {
+            if ($body.find('img[alt*="Logo"]').length > 0) {
+                cy.get('img[alt*="Logo"]').first().click({ force: true });
+            } else if ($body.find('[class*="logo"]').length > 0) {
+                cy.get('[class*="logo"]').first().click({ force: true });
+            } else {
+                cy.contains(/Store Logo/i).click({ force: true });
+            }
+        });
     }
 }
 

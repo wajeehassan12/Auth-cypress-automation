@@ -2,145 +2,145 @@ import loginPage from '../../page-objects/login-page';
 import settingsPage from '../../page-objects/settingsPage';
 import checkoutPage from '../../page-objects/checkoutPage';
 
-// Global Exception Handler to catch leaky client-side exceptions
-Cypress.on('uncaught:exception', (err, runnable) => {
-    if (err.message.includes('secretKeyVerified is not defined')) {
-        return false;
-    }
-    return true;
-});
-
 describe('Checky Pro - End-to-End Re-embed, Cart Journey & Specific Product Bundle Discount Flow', () => {
+
+    beforeEach(() => {
+        const email = Cypress.env('LOGIN_EMAIL');
+        const password = Cypress.env('LOGIN_PASSWORD');
+        const adminUrl = Cypress.config('baseUrl');
+
+        if (!email || !password) {
+            throw new Error('❌ Missing LOGIN_EMAIL or LOGIN_PASSWORD in cypress.env.json configuration.');
+        }
+
+        // Cache session across tests using Page Object Model (Part 1, Rule 6 & Part 2, Rule 1, 6)
+        cy.session([email, password], () => {
+            loginPage.login(email, password, adminUrl);
+        });
+    });
 
     it('Should log in, re-embed script, add specific bundle to cart, validate items, and apply coupon', () => {
 
         // --- 0. ENVIRONMENT SETUP ---
-        const email = Cypress.env('LOGIN_EMAIL') || 'valid_user@test.com';
-        const password = Cypress.env('LOGIN_PASSWORD') || 'Password123!';
-        
-        Cypress.env('DISCOUNT_CODE_SPECIFIC', 'FKN8H02ANCWR');
-        const discountCode = Cypress.env('DISCOUNT_CODE_SPECIFIC'); 
-
         const adminUrl = Cypress.config('baseUrl');
         const storeUrl = Cypress.env('STORE_URL');
+        const discountCode = Cypress.env('DISCOUNT_CODE_SPECIFIC');
 
+        if (!storeUrl || !discountCode) {
+            throw new Error('❌ Missing STORE_URL or DISCOUNT_CODE_SPECIFIC in cypress.env.json configuration.');
+        }
+
+        // Setup network intercepts with explicit aliases OUTSIDE cy.origin (Part 1, Rule 11 & Part 2, Rule 11, 14)
         cy.intercept('GET', '**/store*').as('reEmbedRequest');
-        cy.intercept('POST', '**/ingest/**', { statusCode: 204 }).as('ingestLogs');
+        cy.intercept('POST', '**/checkout/*/discount').as('applyDiscountCode');
+        cy.intercept('POST', '**/cart/add*').as('addToCart');
 
-        // --- 1. DASHBOARD LOGIN (Page Object with Safe Fallback) ---
-        if (typeof loginPage.login === 'function') {
-            loginPage.login(email, password, adminUrl);
-        } else {
-            cy.visit(`${adminUrl}/login`);
-            cy.url({ timeout: 15000 }).should('include', '/login');
-            cy.contains(/welcome back|login/i, { timeout: 20000 }).should('be.visible');
-            cy.get('input[type="email"]').should('be.visible').type(email);
-            cy.get('input[type="password"]').should('be.visible').type(password, { log: false });
-            cy.get('button[type="submit"], button:contains("Log in")').should('be.visible').click();
-            cy.url({ timeout: 30000 }).should('include', '/dashboard');
-        }
+        // --- 1. SETTINGS & SCRIPT RE-EMBED VIA PAGE OBJECT ---
+        cy.visit(`${adminUrl}/dashboard`);
+        settingsPage.navigateToScriptSettings();
+        settingsPage.reEmbedScript();
 
-        // --- 2. SETTINGS & SCRIPT RE-EMBED ---
-        if (typeof settingsPage.navigateToScriptSettings === 'function') {
-            settingsPage.navigateToScriptSettings();
-        } else {
-            cy.contains('Settings', { timeout: 15000 }).should('be.visible').click();
-            cy.url({ timeout: 15000 }).should('include', '/settings');
-            cy.contains(/Checky Pro Script|Script Settings/i, { timeout: 15000 }).should('be.visible').click();
-            cy.url({ timeout: 15000 }).should('include', '/settings/checky-pro-script');
-        }
+        // Assert backend request completion explicitly via alias (Part 1, Rule 2 & Part 2, Rule 11)
+        cy.wait('@reEmbedRequest').its('response.statusCode').should('eq', 200);
+        settingsPage.clearStorageAndCookies();
 
-        if (typeof settingsPage.reEmbedScript === 'function') {
-            settingsPage.reEmbedScript();
-        } else {
-            cy.contains('button', 'Re-embed script').should('be.visible').click();
-            cy.wait('@reEmbedRequest', { timeout: 30000 }).its('response.statusCode').should('eq', 200);
-            cy.wait(3000);
-        }
-
-        // Purge storage configurations
-        cy.log('Purging storage configurations to prevent detached origin crashes...');
-        cy.window().then((win) => {
-            win.sessionStorage.clear();
-            win.localStorage.clear();
-        });
-        cy.clearCookies();
-
-        // --- 3. OPEN SHOPIFY STOREFRONT & ADD BUNDLE (Clean Sandbox Flow) ---
-        cy.log('Step 3: Opening Shopify storefront origin...');
-        cy.origin(storeUrl, { args: { storeUrl } }, ({ storeUrl }) => {
-            Cypress.on('uncaught:exception', () => false);
-
-            // Reusable inline helper to clean layout and sequence product additions
+        // --- 2. SHOPIFY STOREFRONT ORIGIN FLOW (Part 2, Rule 14) ---
+        cy.origin(storeUrl, () => {
+            // Helper function to sequence additions and wait on intercepted requests
             const addProductToCart = (productName) => {
                 cy.visit('/');
-                cy.contains('Featured products', { timeout: 25000 }).should('be.visible').scrollIntoView();
+                cy.contains('Featured products', { timeout: 25000 })
+                    .should('be.visible')
+                    .scrollIntoView();
+
                 cy.get('a:visible').contains(productName).click();
-                cy.get('button[name="add"]', { timeout: 15000 }).should('be.visible').click();
-                cy.wait(1500);
+
+                cy.get('button[name="add"]', { timeout: 15000 })
+                    .should('be.visible')
+                    .and('not.be.disabled')
+                    .click();
+
+                // Accept AJAX success (200/204) OR HTML form POST redirects (302) (Part 1, Rule 2 & Part 2, Rule 11)
+                cy.wait('@addToCart').its('response.statusCode').should('be.oneOf', [200, 204, 302]);
             };
 
             addProductToCart('Laptops');
             addProductToCart('PlayStation®5 Pro Console');
-            
-            cy.contains('View cart', { timeout: 15000 }).should('be.visible').click();
+
+            // Navigate directly to cart page to avoid ephemeral notification pop-up flakiness (Part 2, Rule 5)
+            cy.visit('/cart');
             cy.url().should('include', '/cart');
-            cy.get('button[name="checkout"]:visible').should('be.visible').click();
+
+            cy.get('button[name="checkout"], input[name="checkout"]')
+                .filter(':visible')
+                .first()
+                .should('be.visible')
+                .and('not.be.disabled')
+                .click();
         });
 
-        // --- 4. CHECKOUT REDIRECT & STABILIZATION ---
-        if (typeof checkoutPage.stabilizeCheckout === 'function') {
-            checkoutPage.stabilizeCheckout();
-        } else {
-            cy.url({ timeout: 45000 }).should('include', '/checkout');
-            cy.contains('Contact', { timeout: 25000 }).should('be.visible');
-            cy.wait(4000);
-        }
+        // --- 3. CHECKOUT REDIRECT & STABILIZATION ---
+        checkoutPage.stabilizeCheckout();
 
-        // --- 5. BUNDLE VALIDATION & DISCOUNT ENTRY ---
-        cy.get('body').then(($body) => {
-            const checkoutText = $body.text();
+        // --- 4. BUNDLE VALIDATION (Resilient behavior-based matching) (Part 2, Rule 5) ---
+        cy.contains(/Laptop/i, { timeout: 20000 })
+            .scrollIntoView()
+            .should('be.visible');
 
-            // Perform structural bundle sanity checks
-            const hasLaptop = checkoutText.includes('Laptops');
-            const hasPlayStation = /PlayStation/i.test(checkoutText);
+        cy.contains(/PlayStation/i, { timeout: 20000 })
+            .scrollIntoView()
+            .should('be.visible');
 
-            if (!hasLaptop || !hasPlayStation) {
-                throw new Error(`❌ TEST FAILED: Checkout contents do not match bundle criteria (Laptop + PlayStation).`);
-            }
+        // --- 5. DISCOUNT ENTRY & PRICE DROP ASSERTION ---
+        let initialTotal = 0;
 
-            // Simple price extraction parser
-            const extractPrice = (textValue) => {
-                const matches = textValue.match(/\d+(?:,\d{3})*(?:\.\d+)?/);
-                return matches ? parseFloat(matches[0].replace(/,/g, '')) : parseFloat(textValue.replace(/[^0-9.]/g, ''));
-            };
+        // Clean price extraction helper function
+        const extractPrice = (elementText) => {
+            const matches = elementText.match(/\d+(?:,\d{3})*(?:\.\d+)?/);
+            return matches ? parseFloat(matches[0].replace(/,/g, '')) : parseFloat(elementText.replace(/[^0-9.]/g, ''));
+        };
 
-            // Grab pre-discount benchmark
-            cy.contains('div:visible', 'Total', { timeout: 15000 })
-                .invoke('text')
-                .then((initialText) => {
-                    const initialTotal = extractPrice(initialText);
-                    cy.log(`Initial Order Total: €${initialTotal}`);
+        // Capture pre-discount benchmark with built-in retry-ability (Part 1, Rule 2)
+        cy.contains('div:visible', 'Total', { timeout: 15000 })
+            .invoke('text')
+            .should('match', /\d+/)
+            .then((initialText) => {
+                initialTotal = extractPrice(initialText);
+                cy.log(`Initial Order Total: €${initialTotal}`);
+            });
 
-                    // Locate coupon field dynamically
-                    let $input = $body.find('input[name="discount_code"]');
-                    if ($input.length === 0) {
-                        $input = $body.find('input').filter((i, el) => {
-                            const placeholderText = Cypress.$(el).attr('placeholder') || '';
-                            return placeholderText.toLowerCase().includes('discount');
-                        });
-                    }
+        // Locate coupon field dynamically and enter code
+        cy.get('input[name="discount_code"], input[placeholder*="discount" i]', { timeout: 15000 })
+            .filter(':visible')
+            .first()
+            .should('be.visible')
+            .clear()
+            .type(discountCode);
 
-                    cy.wrap($input.first(), { timeout: 15000 }).should('be.visible').clear().type(discountCode);
-                    cy.get('button:contains("Apply")').should('be.visible').should('not.be.disabled').click({ force: true });
+        // Apply discount code without force: true (Part 2, Rule 9)
+        cy.get('button:contains("Apply")')
+            .filter(':visible')
+            .first()
+            .should('be.visible')
+            .and('not.be.disabled')
+            .click();
 
-                    // Assert total price dropped to pass test pipeline
-                    cy.contains('div:visible', 'Total', { timeout: 15000 }).should(($div) => {
-                        expect(extractPrice($div.text())).to.be.lessThan(initialTotal);
-                    });
-                    
-                    cy.log('✅ TEST PASSED: Match confirmation verified and bundle code applied successfully!');
-                });
-        });
+        // Explicitly wait for backend discount application request (Part 2, Rule 11)
+        cy.wait('@applyDiscountCode').its('response.statusCode').should('be.oneOf', [200, 204, 302]);
+
+        // Assert total price dropped below baseline amount
+        cy.contains('div:visible', 'Total', { timeout: 15000 })
+            .should(($div) => {
+                const finalTotal = extractPrice($div.text());
+                expect(
+                    finalTotal,
+                    '❌ TEST FAILED: Specific product discount was submitted but final order total did not decrease.'
+                ).to.be.lessThan(initialTotal);
+            })
+            .then(($div) => {
+                // Safe logging after assertion passes
+                const finalTotal = extractPrice($div.text());
+                cy.log(`✅ TEST PASSED: Match confirmation verified and bundle code applied successfully! Updated total: €${finalTotal}`);
+            });
     });
 });

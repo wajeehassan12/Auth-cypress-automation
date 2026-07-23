@@ -1,35 +1,18 @@
+import loginPage from '../../page-objects/login-page';
+
 describe('Checky Pro Login', () => {
 
-  it('Should login successfully with valid credentials', () => {
+    it('Should login successfully with valid credentials', () => {
+        // Retrieve credentials from environment variables (Part 1, Rule 11)
+        const email = Cypress.env('LOGIN_EMAIL');
+        const password = Cypress.env('LOGIN_PASSWORD');
 
-    // 1. Fix: Used relative path instead of hardcoded URL (Review Item 3)
-    cy.visit('/login');
+        if (!email || !password) {
+            throw new Error('❌ Missing LOGIN_EMAIL or LOGIN_PASSWORD in configuration.');
+        }
 
-    // Verify the login page is loaded
-    cy.contains('Welcome back! Login to Checky Pro')
-      .should('be.visible');
-
-    // 2. Fallback: Targeting placeholder attributes until data-cy is added to the HTML source
-    cy.get('input[placeholder*="email" i], input[placeholder*="Email" i]')
-      .should('be.visible')
-      .clear()
-      .type(Cypress.env('LOGIN_EMAIL'));
-
-    // 2. Fallback: Targeting placeholder attributes until data-cy is added to the HTML source
-    cy.get('input[placeholder*="password" i], input[placeholder*="Password" i]')
-      .should('be.visible')
-      .clear()
-      .type(Cypress.env('LOGIN_PASSWORD'), { log: false }); 
-
-    // 2. Fallback: Targeting the button specifically by its unique type inside the form
-    cy.get('form button[type="submit"]')
-      .should('be.visible')
-      .click();
-
-    // Verify successful login landing zone
-    cy.url({ timeout: 15000 }).should('include', '/dashboard');
-    cy.url().should('not.include', '/login');
-
-  });
+        // Single Page Object call handles visit, header check, login flow, and dashboard redirect assertion (Part 2, Rule 1)
+        loginPage.login(email, password);
+    });
 
 });

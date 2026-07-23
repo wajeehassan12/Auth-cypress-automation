@@ -1,39 +1,112 @@
 class SettingsPage {
-    navigateToScriptSettings() {
-        // 1. Ensure we are actually on the settings page first
-        cy.url().then((currentUrl) => {
-            if (!currentUrl.includes('/settings')) {
-                cy.log('Not on settings page. Navigating to Settings...');
-                cy.contains('Settings', { timeout: 15000 })
-                  .should('be.visible')
-                  .click();
-                
-                // Wait for the URL transition to complete
-                cy.url({ timeout: 15000 }).should('include', '/settings');
-            }
-        });
+    // 1. Basic navigation to main Settings
+    navigateToSettings() {
+        cy.contains('a, button, span', 'Settings', { timeout: 15000 })
+            .filter(':visible')
+            .first()
+            .click();
 
-        // 2. Find and click the script settings option
-        // Added .scrollIntoView() and increased timeout to handle rendering lag
-        cy.contains(/Checky Pro Script|Script Settings/i, { timeout: 15000 })
-            .scrollIntoView()
+        cy.url().should('include', '/settings');
+    }
+
+    // 2. Sub-navigation to Script Settings tab
+    navigateToScriptSettings() {
+        this.navigateToSettings();
+
+        cy.contains('a, button, [role="tab"], span', 'Checky Pro Script', { timeout: 15000 })
+            .filter(':visible')
+            .first()
             .should('be.visible')
             .click();
-        
-        // 3. Confirm we reached the script settings page
+
         cy.url({ timeout: 15000 }).should('include', '/checky-pro-script');
     }
 
+    // 3. Re-embed script with precise route intercepting (Part 1, Rule 11 & Part 2, Rule 11)
     reEmbedScript() {
+        // Target exact re-embed route to avoid catching ambient store JS files
+        cy.intercept('**/re-embed*').as('reEmbedRequest');
+
         cy.contains('button', 'Re-embed script', { timeout: 15000 })
-            .scrollIntoView()
+            .filter(':visible')
+            .first()
             .should('be.visible')
             .click();
-        
-        // Wait for the background network request to finish successfully
+
+        // Retry until response object exists before checking status code
         cy.wait('@reEmbedRequest', { timeout: 30000 })
-            .its('response.statusCode')
+            .its('response')
+            .should('exist')
+            .its('statusCode')
             .should('eq', 200);
+    }
+
+    // 4. Navigation to Shipping Rates settings section
+    navigateToShippingRates() {
+        cy.contains('a, button, span', 'Shipping Rates', { timeout: 15000 })
+            .filter(':visible')
+            .first()
+            .click();
+
+        cy.url({ timeout: 15000 }).should('include', '/shipping-rates');
+    }
+
+    // 5. Create a new custom shipping rate rule
+    createShippingRate({ name, min, max, price }) {
+        cy.contains('button', 'Create shipping rate', { timeout: 15000 })
+            .filter(':visible')
+            .first()
+            .click();
+
+        cy.get('input[placeholder="Same day shipping"]', { timeout: 15000 })
+            .should('be.visible')
+            .type(name);
+
+        cy.get('input[placeholder="Shipping rate #1"]', { timeout: 15000 })
+            .should('be.visible')
+            .type(name);
+
+        cy.get('input[placeholder="Delivery in 7-8 days"]', { timeout: 15000 })
+            .should('be.visible')
+            .type('3-9');
+
+        cy.contains('div, button, span', 'Cart Value', { timeout: 15000 })
+            .filter(':visible')
+            .first()
+            .click();
+
+        cy.contains('div, label, span', 'Minimum value', { timeout: 15000 })
+            .parent()
+            .find('input')
+            .first()
+            .clear()
+            .type(min);
+
+        cy.contains('div, label, span', 'Maximum value', { timeout: 15000 })
+            .parent()
+            .find('input')
+            .last()
+            .clear()
+            .type(max);
+
+        cy.get('input[placeholder="0.00"]', { timeout: 15000 })
+            .first()
+            .clear()
+            .type(price);
+
+        cy.contains('button', 'Save', { timeout: 15000 })
+            .filter(':visible')
+            .last()
+            .click();
+    }
+
+    // 6. Clean session storage and cookies
+    clearStorageAndCookies() {
+        cy.clearCookies();
+        cy.clearLocalStorage();
+        cy.window().then((win) => {
+            win.sessionStorage.clear();
+        });
     }
 }
 

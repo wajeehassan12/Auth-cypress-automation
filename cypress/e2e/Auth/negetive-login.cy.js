@@ -1,137 +1,69 @@
+import loginPage from '../../page-objects/login-page';
+
+// Centralized test data object
+const testData = {
+    invalidEmail: 'invalid_user@test.com',
+    invalidPassword: 'WrongPassword123!',
+    invalidEmailFormat: 'invalid-email-format'
+};
+
 describe('Checky Pro Login - Negative Scenarios', () => {
 
-  beforeEach(() => {
-    // Fix: Replaced hardcoded URL with relative path (Review Item 3)
-    cy.visit('/login');
+    beforeEach(() => {
+        loginPage.visit();
+    });
 
-    cy.contains('Welcome back! Login to Checky Pro')
-      .should('be.visible');
-  });
+    it('Should not login with an invalid email', () => {
+        const validPassword = Cypress.env('LOGIN_PASSWORD');
 
-  it('Should not login with an invalid email', () => {
-    const invalidEmail = Cypress.env('INVALID_EMAIL') || 'invalid_user@test.com';
-    const password = Cypress.env('LOGIN_PASSWORD') || 'Password123!';
+        loginPage.attemptLogin(testData.invalidEmail, validPassword);
+        loginPage.assertStillOnLoginPage();
+        loginPage.assertErrorMessage();
+    });
 
-    // Fix: Standard clean CSS selectors targeting visible elements safely (Review Item 1)
-    cy.get('input[type="email"]:visible')
-      .type(invalidEmail);
+    it('Should not login with an invalid password', () => {
+        const validEmail = Cypress.env('LOGIN_EMAIL');
 
-    cy.get('input[type="password"]:visible')
-      .type(password, { log: false });
+        loginPage.attemptLogin(validEmail, testData.invalidPassword);
+        loginPage.assertStillOnLoginPage();
+        loginPage.assertErrorMessage();
+    });
 
-    cy.get('button')
-      .contains(/Log in/i)
-      .click();
+    it('Should not login with both invalid email and password', () => {
+        loginPage.attemptLogin(testData.invalidEmail, testData.invalidPassword);
+        loginPage.assertStillOnLoginPage();
+        loginPage.assertErrorMessage();
+    });
 
-    cy.url().should('include', '/login');
+    it('Should not login when email is empty', () => {
+        const validPassword = Cypress.env('LOGIN_PASSWORD');
 
-    cy.contains(/invalid|incorrect|credentials|failed/i)
-      .should('be.visible');
-  });
+        loginPage.attemptLogin('', validPassword);
+        loginPage.assertEmailInvalidState();
+        loginPage.assertStillOnLoginPage();
+    });
 
-  it('Should not login with an invalid password', () => {
-    const email = Cypress.env('LOGIN_EMAIL') || 'valid_user@test.com';
-    const invalidPassword = Cypress.env('INVALID_PASSWORD') || 'WrongPassword!';
+    it('Should not login when password is empty', () => {
+        const validEmail = Cypress.env('LOGIN_EMAIL');
 
-    cy.get('input[type="email"]:visible')
-      .type(email);
+        loginPage.attemptLogin(validEmail, '');
+        loginPage.assertPasswordInvalidState();
+        loginPage.assertStillOnLoginPage();
+    });
 
-    cy.get('input[type="password"]:visible')
-      .type(invalidPassword, { log: false });
+    it('Should not login when both email and password are empty', () => {
+        loginPage.clickSubmit();
+        loginPage.assertEmailInvalidState();
+        loginPage.assertPasswordInvalidState();
+        loginPage.assertStillOnLoginPage();
+    });
 
-    cy.get('button')
-      .contains(/Log in/i)
-      .click();
+    it('Should not login with an invalid email format', () => {
+        const validPassword = Cypress.env('LOGIN_PASSWORD');
 
-    cy.url().should('include', '/login');
-
-    cy.contains(/invalid|incorrect|credentials|failed/i)
-      .should('be.visible');
-  });
-
-  it('Should not login with both invalid email and password', () => {
-    const invalidEmail = Cypress.env('INVALID_EMAIL') || 'invalid_user@test.com';
-    const invalidPassword = Cypress.env('INVALID_PASSWORD') || 'WrongPassword!';
-
-    cy.get('input[type="email"]:visible')
-      .type(invalidEmail);
-
-    cy.get('input[type="password"]:visible')
-      .type(invalidPassword, { log: false });
-
-    cy.get('button')
-      .contains(/Log in/i)
-      .click();
-
-    cy.url().should('include', '/login');
-
-    cy.contains(/invalid|incorrect|credentials|failed/i)
-      .should('be.visible');
-  }); 
-
-  it('Should not login when email is empty', () => {
-    const password = Cypress.env('LOGIN_PASSWORD') || 'Password123!';
-
-    cy.get('input[type="password"]:visible')
-      .type(password, { log: false });
-
-    cy.get('button')
-      .contains(/Log in/i)
-      .click();
-
-    cy.get('input[type="email"]:invalid')
-      .should('exist');
-
-    cy.url().should('include', '/login');
-  });
-
-  it('Should not login when password is empty', () => {
-    const email = Cypress.env('LOGIN_EMAIL') || 'valid_user@test.com';
-
-    cy.get('input[type="email"]:visible')
-      .type(email);
-
-    cy.get('button')
-      .contains(/Log in/i)
-      .click();
-
-    cy.get('input[type="password"]:invalid')
-      .should('exist');
-
-    cy.url().should('include', '/login');
-  });
-
-  it('Should not login when both email and password are empty', () => {
-    cy.get('button')
-      .contains(/Log in/i)
-      .click();
-
-    cy.get('input[type="email"]:invalid')
-      .should('exist');
-
-    cy.get('input[type="password"]:invalid')
-      .should('exist');
-
-    cy.url().should('include', '/login');
-  });
-
-  it('Should not login with an invalid email format', () => {
-    const password = Cypress.env('LOGIN_PASSWORD') || 'Password123!';
-
-    cy.get('input[type="email"]:visible')
-      .type('invalid-email');
-
-    cy.get('input[type="password"]:visible')
-      .type(password, { log: false });
-
-    cy.get('button')
-      .contains(/Log in/i)
-      .click();
-
-    cy.get('input[type="email"]:invalid')
-      .should('exist');
-
-    cy.url().should('include', '/login');
-  });
+        loginPage.attemptLogin(testData.invalidEmailFormat, validPassword);
+        loginPage.assertEmailInvalidState();
+        loginPage.assertStillOnLoginPage();
+    });
 
 });
