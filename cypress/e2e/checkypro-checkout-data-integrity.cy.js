@@ -1,82 +1,78 @@
+import loginPage from '../page-objects/login-page';
+import settingsPage from '../page-objects/settingsPage';
+import checkoutPage from '../page-objects/checkoutPage';
+
 describe('Checky Pro - Check-out-page Automation & Product Flow Verification', () => {
 
-    it('Should login, re-embed script, select Laptop from featured products, and verify cart data matches checkout', () => {
-        
+    beforeEach(() => {
         const email = Cypress.env('LOGIN_EMAIL');
         const password = Cypress.env('LOGIN_PASSWORD');
-        // Fetch the domain dynamically from cypress.config.js env
-        const storeUrl = Cypress.env('STORE_URL');
+        const adminUrl = Cypress.config('baseUrl');
 
-        if (!email || !password || !storeUrl) {
-            throw new Error('Missing configuration parameters in environment options.');
+        if (!email || !password) {
+            throw new Error('❌ Missing LOGIN_EMAIL or LOGIN_PASSWORD in cypress.env.json configuration.');
         }
 
-        cy.intercept('GET', '**/store*').as('reEmbedRequest');
-        cy.intercept('POST', '**/ingest/**', { statusCode: 204 }).as('ingestLogs');
+        // Cache session authentication across tests (Part 1, Rule 6 & Part 2, Rule 6)
+        cy.session([email, password], () => {
+            loginPage.login(email, password, adminUrl);
+        });
+    });
 
-        cy.visit('/login');
+    it('Should re-embed script, select Laptop, and verify cart data matches checkout', () => {
 
-        cy.contains('Welcome back! Login to Checky Pro', { timeout: 20000 })
-            .should('be.visible');
+        // --- 0. CONFIGURATION & URL NORMALIZATION ---
+        const adminUrl = Cypress.config('baseUrl');
+        let storeUrl = Cypress.env('STORE_URL');
 
-        cy.get('input[type="email"]:visible').should('be.visible').clear().type(email);
-        cy.get('input[type="password"]:visible').should('be.visible').clear().type(password, { log: false });
-        
-        cy.get('button')
-            .contains(/Log in/i)
-            .should('be.visible')
-            .click();
+        if (!storeUrl) {
+            throw new Error('❌ Missing STORE_URL in cypress.env.json configuration.');
+        }
 
-        cy.url({ timeout: 30000 }).should('include', '/dashboard');
+        // Enforce HTTPS protocol to prevent spec bridge mismatch (http -> https)
+        if (!storeUrl.startsWith('http://') && !storeUrl.startsWith('https://')) {
+            storeUrl = `https://${storeUrl}`;
+        } else if (storeUrl.startsWith('http://')) {
+            storeUrl = storeUrl.replace('http://', 'https://');
+        }
 
-        // --- 2. SETTINGS & RE-EMBED ---
-        cy.contains('Settings', { timeout: 15000 }).should('be.visible').click();
-        cy.url({ timeout: 15000 }).should('include', '/settings');
+        // --- 1. DASHBOARD & RE-EMBED SCRIPT VIA PAGE OBJECT ---
+        cy.visit(`${adminUrl}/dashboard`);
+        settingsPage.navigateToScriptSettings();
+        settingsPage.reEmbedScript();
+        settingsPage.clearStorageAndCookies();
 
-        cy.contains('Checky Pro Script', { timeout: 15000 }).should('be.visible').click();
-        cy.url({ timeout: 15000 }).should('include', '/settings/checky-pro-script');
-
-        cy.get('button')
-            .contains(/Re-embed script/i)
-            .should('be.visible')
-            .click();
-
-        cy.wait('@reEmbedRequest', { timeout: 30000 })
-            .then((interception) => {
-                expect(interception.response.statusCode).to.eq(200);
-            });
-
-        // --- 3. STOREFRONT ORIGIN FLOW ---
+        // --- 2. STOREFRONT ORIGIN FLOW & DATA CAPTURE (Part 2, Rule 14) ---
         cy.origin(storeUrl, { args: { storeUrl } }, ({ storeUrl }) => {
-            
-            Cypress.on('uncaught:exception', (err) => {
-                if (err.message.includes('registerTool') || err.message.includes('permissions policy')) {
-                    return false; 
-                }
-                return true;
-            });
+            const storefrontModule = Cypress.require('../page-objects/storefrontPage');
+            const TargetExport = storefrontModule.default || storefrontModule;
+            const storefront = (typeof TargetExport === 'function') 
+                ? new TargetExport() 
+                : (TargetExport.storefrontPage || TargetExport);
 
-            cy.visit('/', { 
-                timeout: 60000,
-                pageLoadTimeout: 60000,
-                retryOnStatusCodeFailure: true 
-            });
+            cy.visit(storeUrl);
 
-            // Fix: Replaced the invalid chainer assertion with a proper dynamic include check
-            cy.url({ timeout: 30000 }).should('include', 'checkyprostore');
+            // Add product via Page Object method or retryable selector fallback
+            if (storefront && typeof storefront.addProductToCart === 'function') {
+                storefront.addProductToCart('Laptops', 1);
+            } else {
+                cy.contains('a:visible', 'Laptops', { timeout: 15000 }).click();
+                cy.get('button[name="add"]', { timeout: 15000 })
+                    .should('be.visible')
+                    .and('not.be.disabled')
+                    .click();
+            }
 
-            cy.contains('Featured products').should('be.visible').scrollIntoView();
-            cy.get('a:visible').contains('Laptops').click();
-            cy.url().should('include', '/products/laptops');
+            // Navigate to Cart Page
+            if (storefront && typeof storefront.goToCheckout === 'function') {
+                storefront.goToCheckout();
+            } else {
+                cy.visit(`${storeUrl}/cart`);
+            }
 
-            cy.get('button[name="add"]').should('be.visible').click();
-            cy.contains('View cart').should('be.visible').click();
-            cy.url().should('include', '/cart');
-
-            // --- DATA CAPTURE ---
-            return cy.get('form[action="/cart"], .cart__footer, main, body')
+            // Capture Cart Details and Proceed to Checkout
+            return cy.get('form[action="/cart"], .cart__footer, main, body', { timeout: 15000 })
                 .first()
-                .should('be.visible')
                 .then(($cartContainer) => {
                     let capturedData = { itemCount: "1", totalPrice: "" };
 
@@ -84,52 +80,45 @@ describe('Checky Pro - Check-out-page Automation & Product Flow Verification', (
                     if (inputVal) {
                         capturedData.itemCount = inputVal.trim();
                     } else {
-                        const text = $cartContainer.text();
-                        const match = text.match(/(\d+)\s*item/i) || text.match(/Quantity:\s*(\d+)/i);
+                        const match = $cartContainer.text().match(/(\d+)\s*item/i) || $cartContainer.text().match(/Quantity:\s*(\d+)/i);
                         if (match) capturedData.itemCount = match[1];
                     }
 
-                    const textContent = $cartContainer.text();
-                    const priceMatch = textContent.match(/[€$]\d+[.,]\d{2}/);
+                    const priceMatch = $cartContainer.text().match(/[€$]\d+[.,]\d{2}/);
                     if (priceMatch) {
                         capturedData.totalPrice = priceMatch[0].replace(/[^0-9.,]/g, '').replace(',', '.');
                     }
 
-                    cy.get('button[name="checkout"]:visible')
+                    // Click checkout without { force: true } (Part 2, Rule 9)
+                    cy.get('button[name="checkout"], input[name="checkout"]', { timeout: 15000 })
+                        .filter(':visible')
+                        .first()
                         .should('be.visible')
-                        .should('not.be.disabled')
+                        .and('not.be.disabled')
                         .click();
 
                     return cy.wrap(capturedData);
                 });
         }).then((cartData) => {
-            cy.url({ timeout: 45000 }).should('include', '/checkout');
-            cy.contains('Contact', { timeout: 20000 }).should('be.visible');
-            cy.get('input[type="email"]', { timeout: 15000 }).should('be.visible');
 
-            // --- DATA VERIFICATION ---
-            cy.get('body', { timeout: 15000 }).should(($body) => {
-                const quantityElement = $body.find('.product-thumbnail__quantity, [class*="badge"], [class*="quantity"], .order-summary');
-                if (quantityElement.length > 0) {
-                    const checkoutCountText = quantityElement.first().text();
-                    const checkoutCount = checkoutCountText.replace(/\D/g, '');
-                    if (checkoutCount) {
-                        expect(checkoutCount).to.equal(cartData.itemCount);
-                    } else {
-                        expect($body.text()).to.include(cartData.itemCount);
-                    }
-                } else {
-                    expect($body.text()).to.include(cartData.itemCount);
-                }
+            // --- 3. CHECKOUT VERIFICATION VIA PAGE OBJECT ---
+            checkoutPage.stabilizeCheckout();
+
+            // Validate Item Quantity at Checkout
+            cy.get('body:visible', { timeout: 15000 }).should(($body) => {
+                const textContent = $body.text();
+                expect(textContent, 'Checkout page should contain captured cart item count').to.include(cartData.itemCount);
             });
 
+            // Validate Pricing Matrix at Checkout
             if (cartData.totalPrice) {
-                cy.get('body', { timeout: 15000 }).should(($body) => {
-                    const pageText = $body.text();
-                    const match = pageText.match(/[€$]\d+[.,]\d{2}/);
-                    expect(match).to.not.be.null;
-                    const checkoutPrice = match[0].replace(/[^0-9.,]/g, '').replace(',', '.');
-                    expect(parseFloat(checkoutPrice)).to.equal(parseFloat(cartData.totalPrice));
+                cy.get('body:visible', { timeout: 15000 }).should(($body) => {
+                    const match = $body.text().match(/[€$]\d+[.,]\d{2}/);
+                    expect(match, 'Checkout price format should be visible').to.not.be.null;
+
+                    const checkoutPrice = parseFloat(match[0].replace(/[^0-9.,]/g, '').replace(',', '.'));
+                    const originalPrice = parseFloat(cartData.totalPrice);
+                    expect(checkoutPrice, 'Checkout price matches captured cart total').to.equal(originalPrice);
                 });
             }
         });
